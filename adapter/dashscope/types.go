@@ -4,9 +4,9 @@ package dashscope
 
 // Request types
 type GenerationRequest struct {
-	Model      string                  `json:"model"`
-	Input      *GenerationInput        `json:"input"`
-	Parameters *GenerationParameters   `json:"parameters,omitempty"`
+	Model      string                `json:"model"`
+	Input      *GenerationInput      `json:"input"`
+	Parameters *GenerationParameters `json:"parameters,omitempty"`
 }
 
 type GenerationInput struct {
@@ -14,9 +14,22 @@ type GenerationInput struct {
 }
 
 type Message struct {
-	Role             string  `json:"role"`                        // system, user, assistant
-	Content          string  `json:"content"`
-	ReasoningContent *string `json:"reasoning_content,omitempty"` // Reasoning/thinking content
+	Role             string      `json:"role"`                        // system, user, assistant, tool
+	Content          string      `json:"content,omitempty"`
+	ReasoningContent *string     `json:"reasoning_content,omitempty"` // Reasoning/thinking content
+	ToolCalls        []*ToolCall `json:"tool_calls,omitempty"`        // Tool calls in assistant message
+	Name             string      `json:"name,omitempty"`              // Tool name for tool role
+}
+
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // "function"
+	Function FunctionCall `json:"function"`
+}
+
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // JSON string
 }
 
 type GenerationParameters struct {
@@ -29,6 +42,19 @@ type GenerationParameters struct {
 	Seed           *int     `json:"seed,omitempty"`
 	Stream         *bool    `json:"incremental_output,omitempty"` // DashScope uses incremental_output for streaming
 	EnableThinking *bool    `json:"enable_thinking,omitempty"`    // Enable thinking/reasoning mode
+	Tools          []*Tool  `json:"tools,omitempty"`              // Tools are in parameters for DashScope
+}
+
+// Tool definition for function calling
+type Tool struct {
+	Type     string              `json:"type"` // "function"
+	Function *FunctionDefinition `json:"function"`
+}
+
+type FunctionDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
 }
 
 // Response types

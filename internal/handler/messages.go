@@ -240,13 +240,13 @@ func (h *MessagesHandler) handleDashScope(ctx context.Context, c *app.RequestCon
 	// Extract DashScope base URL from X-Autory-Dashscope-Endpoint header
 	dashscopeBaseURL := string(c.GetHeader("X-Autory-Dashscope-Endpoint"))
 	if dashscopeBaseURL == "" {
-		// Default to China region
+		// Default to China region (without /services/aigc/text-generation/generation path)
 		dashscopeBaseURL = "https://dashscope.aliyuncs.com/api/v1"
 	}
 	// Remove trailing slash if present
 	dashscopeBaseURL = strings.TrimSuffix(dashscopeBaseURL, "/")
 
-	hlog.Infof("[Handler] Using DashScope base URL: %s", dashscopeBaseURL)
+	hlog.Infof("[Handler] Using DashScope base URL: %s (will append /services/aigc/text-generation/generation)", dashscopeBaseURL)
 
 	// Parse request
 	var req types.AnthropicRequest

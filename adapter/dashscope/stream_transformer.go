@@ -55,6 +55,9 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 
 	choice := chunk.Output.Choices[0]
 
+	// DashScope uses "null" string for ongoing chunks, not empty string
+	isFinished := choice.FinishReason != "" && choice.FinishReason != "null"
+
 	// Handle reasoning content delta (thinking)
 	if choice.Message != nil && choice.Message.ReasoningContent != nil && *choice.Message.ReasoningContent != "" {
 		fmt.Printf("[DashScope StreamTransform] Processing reasoning_content delta, length: %d\n", len(*choice.Message.ReasoningContent))
@@ -141,8 +144,8 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 		}))
 	}
 
-	// Handle finish
-	if choice.FinishReason != "" {
+	// Handle finish (only when finish_reason is not "null")
+	if isFinished {
 		fmt.Printf("[DashScope StreamTransform] Received finish reason: %s\n", choice.FinishReason)
 
 		// Stop current content block

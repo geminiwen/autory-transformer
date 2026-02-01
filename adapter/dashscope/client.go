@@ -27,7 +27,7 @@ func (c *Client) SendRequest(ctx context.Context, req *GenerationRequest, apiKey
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	hlog.Infof("[DashScope] Sending request to: %s", baseURL)
+	hlog.Infof("[DashScope] Sending request to: %s/services/aigc/text-generation/generation", baseURL)
 
 	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/services/aigc/text-generation/generation", bytes.NewReader(reqBody))
@@ -68,7 +68,7 @@ func (c *Client) SendRequest(ctx context.Context, req *GenerationRequest, apiKey
 
 // StreamRequest sends a streaming request to DashScope API
 func (c *Client) StreamRequest(ctx context.Context, req *GenerationRequest, apiKey, baseURL string) (*StreamReader, error) {
-	hlog.Infof("[DashScope] Creating stream request to: %s", baseURL)
+	hlog.Infof("[DashScope] Creating stream request to: %s/services/aigc/text-generation/generation", baseURL)
 
 	// Enable streaming
 	req.Parameters.Stream = boolPtr(true)
