@@ -2,6 +2,7 @@ package dashscope
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
@@ -32,11 +33,31 @@ func TransformResponse(dashResp *GenerationResponse, originalModel string) *type
 	}
 
 	// Handle text content
-	if choice.Message != nil && choice.Message.Content != "" {
-		content = append(content, types.ContentBlock{
-			Type: "text",
-			Text: &choice.Message.Content,
-		})
+	if choice.Message != nil && choice.Message.Content != nil {
+		// Content can be string or []ContentItem, extract text
+		var textContent string
+		switch v := choice.Message.Content.(type) {
+		case string:
+			textContent = v
+		case []interface{}:
+			// For multimodal responses, extract text parts
+			var parts []string
+			for _, item := range v {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if text, ok := itemMap["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				}
+			}
+			textContent = strings.Join(parts, "")
+		}
+
+		if textContent != "" {
+			content = append(content, types.ContentBlock{
+				Type: "text",
+				Text: &textContent,
+			})
+		}
 	}
 
 	stopReason := transformStopReason(choice.FinishReason)

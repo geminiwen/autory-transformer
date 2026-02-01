@@ -240,13 +240,19 @@ func (h *MessagesHandler) handleDashScope(ctx context.Context, c *app.RequestCon
 	// Extract DashScope base URL from X-Autory-Dashscope-Endpoint header
 	dashscopeBaseURL := string(c.GetHeader("X-Autory-Dashscope-Endpoint"))
 	if dashscopeBaseURL == "" {
-		// Default to China region (without /services/aigc/text-generation/generation path)
+		// Default to China region
 		dashscopeBaseURL = "https://dashscope.aliyuncs.com/api/v1"
 	}
 	// Remove trailing slash if present
 	dashscopeBaseURL = strings.TrimSuffix(dashscopeBaseURL, "/")
 
-	hlog.Infof("[Handler] Using DashScope base URL: %s (will append /services/aigc/text-generation/generation)", dashscopeBaseURL)
+	// Extract multimodal model name (optional, for image understanding)
+	multimodalModel := string(c.GetHeader("X-Autory-DashScope-MultiModal"))
+
+	hlog.Infof("[Handler] Using DashScope base URL: %s", dashscopeBaseURL)
+	if multimodalModel != "" {
+		hlog.Infof("[Handler] Multimodal model configured: %s", multimodalModel)
+	}
 
 	// Parse request
 	var req types.AnthropicRequest
@@ -273,7 +279,7 @@ func (h *MessagesHandler) handleDashScope(ctx context.Context, c *app.RequestCon
 	}
 
 	// Transform request
-	dashReq, err := dashscope.TransformRequest(&req, req.Model)
+	textReq, multiReq, err := dashscope.TransformRequest(&req, req.Model)
 	if err != nil {
 		hlog.Errorf("[Handler] DashScope - Transform error: %v", err)
 		if apiErr, ok := err.(*errors.APIError); ok {
@@ -284,24 +290,54 @@ func (h *MessagesHandler) handleDashScope(ctx context.Context, c *app.RequestCon
 		return
 	}
 
-	hlog.Infof("[Handler] DashScope - Transformed request - Model: %s, Messages: %d, Parameters: %+v",
-		dashReq.Model, len(dashReq.Input.Messages), dashReq.Parameters)
+	// Determine which API to use based on content type
+	if multiReq != nil {
+		// Use multimodal API for image understanding
+		modelToUse := multimodalModel
+		if modelToUse == "" {
+			// If multimodal model not specified, use the original model from request
+			modelToUse = req.Model
+			hlog.Warnf("[Handler] X-Autory-DashScope-MultiModal not specified, using request model: %s (may not support images)", modelToUse)
+		} else {
+			hlog.Infof("[Handler] Using multimodal model from header: %s", modelToUse)
+		}
 
-	// Handle streaming vs non-streaming
-	if req.Stream {
-		hlog.Infof("[Handler] DashScope - Routing to stream handler")
-		h.handleDashScopeStream(ctx, c, dashReq, req.Model, apiKey, dashscopeBaseURL)
+		hlog.Infof("[Handler] Using multimodal API for image understanding with model: %s", modelToUse)
+		// Set model for multimodal API
+		multiReq.Model = modelToUse
+
+		hlog.Infof("[Handler] DashScope - Transformed multimodal request - Model: %s, Messages: %d, Parameters: %+v",
+			multiReq.Model, len(multiReq.Input.Messages), multiReq.Parameters)
+
+		if req.Stream {
+			hlog.Infof("[Handler] DashScope - Routing to multimodal stream handler")
+			h.handleDashScopeStream(ctx, c, multiReq, req.Model, apiKey, dashscopeBaseURL, true)
+		} else {
+			hlog.Infof("[Handler] DashScope - Routing to multimodal non-stream handler")
+			h.handleDashScopeNonStream(ctx, c, multiReq, req.Model, apiKey, dashscopeBaseURL, true)
+		}
 	} else {
-		hlog.Infof("[Handler] DashScope - Routing to non-stream handler")
-		h.handleDashScopeNonStream(ctx, c, dashReq, req.Model, apiKey, dashscopeBaseURL)
+		// Use text generation API for regular requests
+		hlog.Infof("[Handler] Using text generation API")
+
+		hlog.Infof("[Handler] DashScope - Transformed request - Model: %s, Messages: %d, Parameters: %+v",
+			textReq.Model, len(textReq.Input.Messages), textReq.Parameters)
+
+		if req.Stream {
+			hlog.Infof("[Handler] DashScope - Routing to stream handler")
+			h.handleDashScopeStream(ctx, c, textReq, req.Model, apiKey, dashscopeBaseURL, false)
+		} else {
+			hlog.Infof("[Handler] DashScope - Routing to non-stream handler")
+			h.handleDashScopeNonStream(ctx, c, textReq, req.Model, apiKey, dashscopeBaseURL, false)
+		}
 	}
 }
 
-func (h *MessagesHandler) handleDashScopeNonStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string) {
-	hlog.Infof("[DashScope] Sending non-stream request")
+func (h *MessagesHandler) handleDashScopeNonStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string, isMultimodal bool) {
+	hlog.Infof("[DashScope] Sending non-stream request (multimodal: %v)", isMultimodal)
 
 	// Send request to DashScope
-	dashResp, err := h.dashscopeClient.SendRequest(ctx, dashReq, apiKey, baseURL)
+	dashResp, err := h.dashscopeClient.SendRequest(ctx, dashReq, apiKey, baseURL, isMultimodal)
 	if err != nil {
 		hlog.Errorf("[DashScope] Request failed: %v", err)
 		if apiErr, ok := err.(*errors.APIError); ok {
@@ -316,8 +352,7 @@ func (h *MessagesHandler) handleDashScopeNonStream(ctx context.Context, c *app.R
 	hlog.Infof("[DashScope] Response received - RequestID: %s", dashResp.RequestID)
 	if dashResp.Output != nil && len(dashResp.Output.Choices) > 0 {
 		choice := dashResp.Output.Choices[0]
-		hlog.Infof("[DashScope] Choice - FinishReason: %s, Content length: %d",
-			choice.FinishReason, len(choice.Message.Content))
+		hlog.Infof("[DashScope] Choice - FinishReason: %s", choice.FinishReason)
 		if choice.Message.ReasoningContent != nil {
 			hlog.Infof("[DashScope] ReasoningContent length: %d", len(*choice.Message.ReasoningContent))
 		}
@@ -334,11 +369,11 @@ func (h *MessagesHandler) handleDashScopeNonStream(ctx context.Context, c *app.R
 	c.JSON(consts.StatusOK, anthropicResp)
 }
 
-func (h *MessagesHandler) handleDashScopeStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string) {
-	hlog.Infof("[DashScope Stream] Starting stream request for model: %s", originalModel)
+func (h *MessagesHandler) handleDashScopeStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string, isMultimodal bool) {
+	hlog.Infof("[DashScope Stream] Starting stream request for model: %s (multimodal: %v)", originalModel, isMultimodal)
 
 	// Send streaming request
-	streamReader, err := h.dashscopeClient.StreamRequest(ctx, dashReq, apiKey, baseURL)
+	streamReader, err := h.dashscopeClient.StreamRequest(ctx, dashReq, apiKey, baseURL, isMultimodal)
 	if err != nil {
 		hlog.Errorf("[DashScope Stream] Failed to create stream: %v", err)
 		if apiErr, ok := err.(*errors.APIError); ok {
@@ -378,7 +413,10 @@ func (h *MessagesHandler) handleDashScopeStream(ctx context.Context, c *app.Requ
 			contentLen := 0
 			reasoningLen := 0
 			if choice.Message != nil {
-				contentLen = len(choice.Message.Content)
+				// Content can be string or other types
+				if contentStr, ok := choice.Message.Content.(string); ok {
+					contentLen = len(contentStr)
+				}
 				if choice.Message.ReasoningContent != nil {
 					reasoningLen = len(*choice.Message.ReasoningContent)
 				}

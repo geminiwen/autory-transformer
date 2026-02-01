@@ -3,6 +3,7 @@ package dashscope
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 )
@@ -97,8 +98,28 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 	}
 
 	// Handle content delta (normal text)
-	if choice.Message != nil && choice.Message.Content != "" {
-		fmt.Printf("[DashScope StreamTransform] Processing content delta, length: %d\n", len(choice.Message.Content))
+	var textContent string
+	if choice.Message != nil && choice.Message.Content != nil {
+		// Content can be string or []ContentItem
+		switch v := choice.Message.Content.(type) {
+		case string:
+			textContent = v
+		case []interface{}:
+			// For multimodal, extract text parts
+			var parts []string
+			for _, item := range v {
+				if itemMap, ok := item.(map[string]interface{}); ok {
+					if text, ok := itemMap["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				}
+			}
+			textContent = strings.Join(parts, "")
+		}
+	}
+
+	if textContent != "" {
+		fmt.Printf("[DashScope StreamTransform] Processing content delta, length: %d\n", len(textContent))
 
 		// Start text block if needed
 		if state.CurrentBlock == nil || state.CurrentBlock.Type != "text" {
@@ -139,7 +160,7 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 			Index: &state.ContentIndex,
 			Delta: &types.TextDelta{
 				Type: "text_delta",
-				Text: choice.Message.Content,
+				Text: textContent,
 			},
 		}))
 	}

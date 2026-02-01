@@ -15,10 +15,16 @@ type GenerationInput struct {
 
 type Message struct {
 	Role             string      `json:"role"`                        // system, user, assistant, tool
-	Content          string      `json:"content,omitempty"`
+	Content          interface{} `json:"content,omitempty"`           // Can be string or []ContentItem for multimodal
 	ReasoningContent *string     `json:"reasoning_content,omitempty"` // Reasoning/thinking content
 	ToolCalls        []*ToolCall `json:"tool_calls,omitempty"`        // Tool calls in assistant message
 	Name             string      `json:"name,omitempty"`              // Tool name for tool role
+}
+
+// ContentItem for multimodal content (text and image)
+type ContentItem struct {
+	Text  string `json:"text,omitempty"`
+	Image string `json:"image,omitempty"` // data:image/jpeg;base64,...
 }
 
 type ToolCall struct {

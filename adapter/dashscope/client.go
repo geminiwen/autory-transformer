@@ -20,17 +20,24 @@ func NewClient() *Client {
 }
 
 // SendRequest sends a non-streaming request to DashScope API
-func (c *Client) SendRequest(ctx context.Context, req *GenerationRequest, apiKey, baseURL string) (*GenerationResponse, error) {
+func (c *Client) SendRequest(ctx context.Context, req *GenerationRequest, apiKey, baseURL string, isMultimodal bool) (*GenerationResponse, error) {
 	// Marshal request to JSON
 	reqBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	hlog.Infof("[DashScope] Sending request to: %s/services/aigc/text-generation/generation", baseURL)
+	// Choose endpoint based on content type
+	endpoint := baseURL + "/services/aigc/text-generation/generation"
+	if isMultimodal {
+		endpoint = baseURL + "/services/aigc/multimodal-generation/generation"
+		hlog.Infof("[DashScope] Using multimodal endpoint: %s", endpoint)
+	} else {
+		hlog.Infof("[DashScope] Sending request to: %s", endpoint)
+	}
 
 	// Create HTTP request
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/services/aigc/text-generation/generation", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -67,8 +74,15 @@ func (c *Client) SendRequest(ctx context.Context, req *GenerationRequest, apiKey
 }
 
 // StreamRequest sends a streaming request to DashScope API
-func (c *Client) StreamRequest(ctx context.Context, req *GenerationRequest, apiKey, baseURL string) (*StreamReader, error) {
-	hlog.Infof("[DashScope] Creating stream request to: %s/services/aigc/text-generation/generation", baseURL)
+func (c *Client) StreamRequest(ctx context.Context, req *GenerationRequest, apiKey, baseURL string, isMultimodal bool) (*StreamReader, error) {
+	// Choose endpoint based on content type
+	endpoint := baseURL + "/services/aigc/text-generation/generation"
+	if isMultimodal {
+		endpoint = baseURL + "/services/aigc/multimodal-generation/generation"
+		hlog.Infof("[DashScope] Creating multimodal stream request to: %s", endpoint)
+	} else {
+		hlog.Infof("[DashScope] Creating stream request to: %s", endpoint)
+	}
 
 	// Enable streaming
 	req.Parameters.Stream = boolPtr(true)
@@ -78,9 +92,10 @@ func (c *Client) StreamRequest(ctx context.Context, req *GenerationRequest, apiK
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+	hlog.Infof("[DashScope] Request body: %s", string(reqBody))
 
 	// Create HTTP request
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/services/aigc/text-generation/generation", bytes.NewReader(reqBody))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

@@ -10,16 +10,33 @@ import (
 )
 
 // TransformRequest converts Anthropic request to DashScope request
-func TransformRequest(req *types.AnthropicRequest, model string) (*GenerationRequest, error) {
+// Returns (textReq, multimodalReq, error)
+// If multimodalReq is not nil, use multimodal API endpoint
+func TransformRequest(req *types.AnthropicRequest, model string) (*GenerationRequest, *GenerationRequest, error) {
 	// Validate unsupported features
 	if err := validateRequest(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Transform messages
-	messages, err := transformMessages(req)
-	if err != nil {
-		return nil, err
+	// Check if request contains multimodal content
+	hasMultimodal := hasMultimodalContent(req)
+
+	var messages []*Message
+	var err error
+
+	if hasMultimodal {
+		// Transform messages for multimodal API
+		messages, err = transformMultimodalMessages(req)
+		if err != nil {
+			return nil, nil, err
+		}
+		hlog.Infof("[DashScope] Detected multimodal content, using multimodal API")
+	} else {
+		// Transform messages for text-only API
+		messages, err = transformMessages(req)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Build DashScope request
@@ -54,6 +71,7 @@ func TransformRequest(req *types.AnthropicRequest, model string) (*GenerationReq
 	if req.Thinking != nil {
 		enableThinking := true
 		dashReq.Parameters.EnableThinking = &enableThinking
+		hlog.Infof("[DashScope] Thinking mode enabled (client requested: %+v)", req.Thinking)
 	}
 
 	// Transform tools (tools go in parameters for DashScope)
@@ -61,7 +79,11 @@ func TransformRequest(req *types.AnthropicRequest, model string) (*GenerationReq
 		dashReq.Parameters.Tools = transformTools(req.Tools)
 	}
 
-	return dashReq, nil
+	// Return appropriate request type
+	if hasMultimodal {
+		return nil, dashReq, nil
+	}
+	return dashReq, nil, nil
 }
 
 func validateRequest(req *types.AnthropicRequest) error {
@@ -72,15 +94,38 @@ func validateRequest(req *types.AnthropicRequest) error {
 
 	// Tool use is now supported - no error needed
 	// Thinking mode is now supported - no error needed
+	// Images are now supported via multimodal API - no error needed
 
-	// Check for unsupported content types
+	// Check for unsupported content types (documents and videos not yet supported)
 	for _, msg := range req.Messages {
 		if hasUnsupportedContent(msg.Content) {
-			return errors.NewInvalidRequestError("Multimodal content (images, documents, videos) is not yet supported for DashScope adapter")
+			return errors.NewInvalidRequestError("Multimodal content (documents, videos) is not yet supported for DashScope adapter")
 		}
 	}
 
 	return nil
+}
+
+func hasMultimodalContent(req *types.AnthropicRequest) bool {
+	for _, msg := range req.Messages {
+		blocks, ok := msg.Content.([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, block := range blocks {
+			blockMap, ok := block.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if blockType, ok := blockMap["type"].(string); ok {
+				if blockType == "image" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func hasUnsupportedContent(content interface{}) bool {
@@ -95,7 +140,8 @@ func hasUnsupportedContent(content interface{}) bool {
 			continue
 		}
 		if blockType, ok := blockMap["type"].(string); ok {
-			if blockType == "image" || blockType == "document" || blockType == "video" {
+			// Only document and video are unsupported, image is now supported via multimodal API
+			if blockType == "document" || blockType == "video" {
 				return true
 			}
 		}
@@ -176,6 +222,119 @@ func extractMessageContent(content interface{}) string {
 	default:
 		return ""
 	}
+}
+
+// transformMultimodalMessages transforms messages for multimodal API
+func transformMultimodalMessages(req *types.AnthropicRequest) ([]*Message, error) {
+	var messages []*Message
+
+	// Add system message if present
+	systemContent := extractSystemContent(req.System)
+	if systemContent != "" {
+		messages = append(messages, &Message{
+			Role:    "system",
+			Content: systemContent,
+		})
+	}
+
+	// Transform user/assistant messages
+	for _, msg := range req.Messages {
+		dashMsgs, err := transformMultimodalMessage(msg)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, dashMsgs...)
+	}
+
+	return messages, nil
+}
+
+// transformMultimodalMessage transforms a single message for multimodal API
+func transformMultimodalMessage(msg types.AnthropicMessage) ([]*Message, error) {
+	var result []*Message
+
+	// Check if this is a tool message
+	toolCalls, toolResultMsg := extractToolInfo(msg.Content)
+	if toolResultMsg != nil {
+		result = append(result, toolResultMsg)
+		return result, nil
+	}
+
+	// Handle content - can be string or array of content blocks
+	switch v := msg.Content.(type) {
+	case string:
+		// Simple text message
+		dashMsg := &Message{
+			Role:    msg.Role,
+			Content: v,
+		}
+		if len(toolCalls) > 0 {
+			dashMsg.ToolCalls = toolCalls
+		}
+		result = append(result, dashMsg)
+
+	case []interface{}:
+		// Multimodal content with text and images
+		var contentItems []ContentItem
+
+		for _, block := range v {
+			blockMap, ok := block.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			blockType, _ := blockMap["type"].(string)
+			switch blockType {
+			case "text":
+				if text, ok := blockMap["text"].(string); ok {
+					contentItems = append(contentItems, ContentItem{
+						Text: text,
+					})
+				}
+
+			case "image":
+				// Extract image data
+				// Anthropic format: {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}}
+				if source, ok := blockMap["source"].(map[string]interface{}); ok {
+					sourceType, _ := source["type"].(string)
+					if sourceType == "base64" {
+						mediaType, _ := source["media_type"].(string)
+						data, _ := source["data"].(string)
+
+						// DashScope format: data:image/jpeg;base64,...
+						imageData := "data:" + mediaType + ";base64," + data
+						contentItems = append(contentItems, ContentItem{
+							Image: imageData,
+						})
+						hlog.Infof("[DashScope] Transformed image block, media_type: %s, data length: %d", mediaType, len(data))
+					}
+				}
+			}
+		}
+
+		// Create message with content array
+		dashMsg := &Message{
+			Role:    msg.Role,
+			Content: contentItems,
+		}
+		if len(toolCalls) > 0 {
+			dashMsg.ToolCalls = toolCalls
+		}
+		result = append(result, dashMsg)
+
+	default:
+		// Fallback to empty content
+		dashMsg := &Message{
+			Role:    msg.Role,
+			Content: "",
+		}
+		if len(toolCalls) > 0 {
+			dashMsg.ToolCalls = toolCalls
+		}
+		result = append(result, dashMsg)
+	}
+
+	return result, nil
 }
 
 func extractToolInfo(content interface{}) ([]*ToolCall, *Message) {
