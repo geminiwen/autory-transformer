@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -88,7 +87,7 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	}
 }
 
-func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestContext, arkReq *model.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
+func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestContext, arkReq *types.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
 	// Send request to Ark
 	arkResp, err := h.arkClient.SendRequest(ctx, arkReq, apiKey, arkBaseURL)
 	if err != nil {
@@ -107,7 +106,7 @@ func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestCon
 	c.JSON(consts.StatusOK, anthropicResp)
 }
 
-func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContext, arkReq *model.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
+func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContext, arkReq *types.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
 	hlog.Infof("[Stream] Starting stream request for model: %s", originalModel)
 
 	// Send streaming request

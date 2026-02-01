@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model"
 	"github.com/geminiwen/anthropic-to-ark/internal/errors"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 )
 
 // TransformRequest converts Anthropic request to Ark SDK request
-func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*model.CreateChatCompletionRequest, error) {
+func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*types.CreateChatCompletionRequest, error) {
 	// Validate unsupported features
 	if err := validateRequest(req); err != nil {
 		return nil, err
@@ -30,7 +29,7 @@ func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*model.C
 	// Build the SDK request
 	// Note: max_tokens is not forwarded for better compatibility.
 	// Ark has a limit of 16384, while Claude Code may send higher values.
-	arkReq := &model.CreateChatCompletionRequest{
+	arkReq := &types.CreateChatCompletionRequest{
 		Model:    arkEndpoint,
 		Messages: messages,
 	}
@@ -44,8 +43,8 @@ func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*model.C
 
 		// Set thinking config if provided
 		if req.Thinking != nil {
-			thinkingType := model.ThinkingType(req.Thinking.Type)
-			arkReq.Thinking = &model.Thinking{
+			thinkingType := types.ThinkingType(req.Thinking.Type)
+			arkReq.Thinking = &types.Thinking{
 				Type: thinkingType,
 			}
 			// Note: budget_tokens is not supported in SDK
@@ -109,15 +108,15 @@ func hasPDFContent(content interface{}) bool {
 	return false
 }
 
-func transformMessages(req *types.AnthropicRequest) ([]*model.ChatCompletionMessage, error) {
-	var messages []*model.ChatCompletionMessage
+func transformMessages(req *types.AnthropicRequest) ([]*types.ChatCompletionMessage, error) {
+	var messages []*types.ChatCompletionMessage
 
 	// Handle system message
 	systemContent := extractSystemContent(req.System)
 	if systemContent != "" {
-		messages = append(messages, &model.ChatCompletionMessage{
-			Role: model.ChatMessageRoleSystem,
-			Content: &model.ChatCompletionMessageContent{
+		messages = append(messages, &types.ChatCompletionMessage{
+			Role: types.ChatMessageRoleSystem,
+			Content: &types.ChatCompletionMessageContent{
 				StringValue: &systemContent,
 			},
 		})
@@ -135,15 +134,15 @@ func transformMessages(req *types.AnthropicRequest) ([]*model.ChatCompletionMess
 	return messages, nil
 }
 
-func transformMessage(msg types.AnthropicMessage) ([]*model.ChatCompletionMessage, error) {
-	var result []*model.ChatCompletionMessage
+func transformMessage(msg types.AnthropicMessage) ([]*types.ChatCompletionMessage, error) {
+	var result []*types.ChatCompletionMessage
 
 	switch content := msg.Content.(type) {
 	case string:
 		// Simple text message
-		result = append(result, &model.ChatCompletionMessage{
-			Role: msg.Role,
-			Content: &model.ChatCompletionMessageContent{
+		result = append(result, &types.ChatCompletionMessage{
+			Role: types.ChatMessageRole(msg.Role),
+			Content: &types.ChatCompletionMessageContent{
 				StringValue: &content,
 			},
 		})
@@ -163,10 +162,10 @@ func transformMessage(msg types.AnthropicMessage) ([]*model.ChatCompletionMessag
 	return result, nil
 }
 
-func transformContentBlocks(role string, blocks []interface{}) (*model.ChatCompletionMessage, []*model.ChatCompletionMessage, error) {
-	var contentParts []*model.ChatCompletionMessageContentPart
-	var toolCalls []*model.ToolCall
-	var toolMessages []*model.ChatCompletionMessage
+func transformContentBlocks(role string, blocks []interface{}) (*types.ChatCompletionMessage, []*types.ChatCompletionMessage, error) {
+	var contentParts []*types.ChatCompletionMessageContentPart
+	var toolCalls []*types.ToolCall
+	var toolMessages []*types.ChatCompletionMessage
 
 	for _, block := range blocks {
 		blockMap, ok := block.(map[string]interface{})
@@ -182,8 +181,8 @@ func transformContentBlocks(role string, blocks []interface{}) (*model.ChatCompl
 		switch blockType {
 		case "text":
 			if text, ok := blockMap["text"].(string); ok {
-				contentParts = append(contentParts, &model.ChatCompletionMessageContentPart{
-					Type: model.ChatCompletionMessageContentPartTypeText,
+				contentParts = append(contentParts, &types.ChatCompletionMessageContentPart{
+					Type: types.ChatCompletionMessageContentPartTypeText,
 					Text: text,
 				})
 			}
@@ -212,20 +211,20 @@ func transformContentBlocks(role string, blocks []interface{}) (*model.ChatCompl
 	}
 
 	// Build main message
-	var mainMsg *model.ChatCompletionMessage
+	var mainMsg *types.ChatCompletionMessage
 	if len(contentParts) > 0 || len(toolCalls) > 0 {
-		mainMsg = &model.ChatCompletionMessage{
-			Role: role,
+		mainMsg = &types.ChatCompletionMessage{
+			Role: types.ChatMessageRole(role),
 		}
 
-		if len(contentParts) == 1 && contentParts[0].Type == model.ChatCompletionMessageContentPartTypeText {
+		if len(contentParts) == 1 && contentParts[0].Type == types.ChatCompletionMessageContentPartTypeText {
 			// Single text content
-			mainMsg.Content = &model.ChatCompletionMessageContent{
+			mainMsg.Content = &types.ChatCompletionMessageContent{
 				StringValue: &contentParts[0].Text,
 			}
 		} else if len(contentParts) > 0 {
 			// Multiple content parts
-			mainMsg.Content = &model.ChatCompletionMessageContent{
+			mainMsg.Content = &types.ChatCompletionMessageContent{
 				ListValue: contentParts,
 			}
 		}
@@ -238,7 +237,7 @@ func transformContentBlocks(role string, blocks []interface{}) (*model.ChatCompl
 	return mainMsg, toolMessages, nil
 }
 
-func transformImageBlock(blockMap map[string]interface{}) (*model.ChatCompletionMessageContentPart, error) {
+func transformImageBlock(blockMap map[string]interface{}) (*types.ChatCompletionMessageContentPart, error) {
 	source, ok := blockMap["source"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("invalid image source")
@@ -249,15 +248,15 @@ func transformImageBlock(blockMap map[string]interface{}) (*model.ChatCompletion
 
 	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
 
-	return &model.ChatCompletionMessageContentPart{
-		Type: model.ChatCompletionMessageContentPartTypeImageURL,
-		ImageURL: &model.ChatMessageImageURL{
+	return &types.ChatCompletionMessageContentPart{
+		Type: types.ChatCompletionMessageContentPartTypeImageURL,
+		ImageURL: &types.ChatMessageImageURL{
 			URL: dataURL,
 		},
 	}, nil
 }
 
-func transformToolUseBlock(blockMap map[string]interface{}) (*model.ToolCall, error) {
+func transformToolUseBlock(blockMap map[string]interface{}) (*types.ToolCall, error) {
 	id, _ := blockMap["id"].(string)
 	name, _ := blockMap["name"].(string)
 	input, _ := blockMap["input"].(map[string]interface{})
@@ -268,17 +267,17 @@ func transformToolUseBlock(blockMap map[string]interface{}) (*model.ToolCall, er
 		return nil, err
 	}
 
-	return &model.ToolCall{
+	return &types.ToolCall{
 		ID:   id,
-		Type: model.ToolTypeFunction,
-		Function: model.FunctionCall{
+		Type: types.ToolTypeFunction,
+		Function: types.FunctionCall{
 			Name:      name,
 			Arguments: string(argsBytes),
 		},
 	}, nil
 }
 
-func transformToolResultBlock(blockMap map[string]interface{}) (*model.ChatCompletionMessage, error) {
+func transformToolResultBlock(blockMap map[string]interface{}) (*types.ChatCompletionMessage, error) {
 	toolUseID, _ := blockMap["tool_use_id"].(string)
 	content := blockMap["content"]
 
@@ -304,22 +303,22 @@ func transformToolResultBlock(blockMap map[string]interface{}) (*model.ChatCompl
 		contentStr = string(bytes)
 	}
 
-	return &model.ChatCompletionMessage{
-		Role:       model.ChatMessageRoleTool,
+	return &types.ChatCompletionMessage{
+		Role:       types.ChatMessageRoleTool,
 		ToolCallID: toolUseID,
-		Content: &model.ChatCompletionMessageContent{
+		Content: &types.ChatCompletionMessageContent{
 			StringValue: &contentStr,
 		},
 	}, nil
 }
 
-func transformTools(tools []types.AnthropicTool) []*model.Tool {
-	var arkTools []*model.Tool
+func transformTools(tools []types.AnthropicTool) []*types.Tool {
+	var arkTools []*types.Tool
 
 	for _, tool := range tools {
-		arkTools = append(arkTools, &model.Tool{
-			Type: model.ToolTypeFunction,
-			Function: &model.FunctionDefinition{
+		arkTools = append(arkTools, &types.Tool{
+			Type: types.ToolTypeFunction,
+			Function: &types.FunctionDefinition{
 				Name:        tool.Name,
 				Description: tool.Description,
 				Parameters:  tool.InputSchema,

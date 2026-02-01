@@ -1,104 +1,207 @@
 package types
 
-// DEPRECATED: This file contains legacy Ark API type definitions.
-// The project now uses the official BytePlus Go SDK v2 types from:
-// github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model
-//
-// This file is kept for reference only and is no longer used in the codebase.
+import (
+	"encoding/json"
+)
 
-// ArkRequest represents the Volcengine Ark API request
-type ArkRequest struct {
-	Model       string       `json:"model"`
-	Messages    []ArkMessage `json:"messages"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Temperature *float64     `json:"temperature,omitempty"`
-	TopP        *float64     `json:"top_p,omitempty"`
-	Stop        []string     `json:"stop,omitempty"`
-	Stream      bool         `json:"stream,omitempty"`
-	Tools       []ArkTool    `json:"tools,omitempty"`
+// Ark API type definitions
+// This file contains all type definitions needed for Ark API communication,
+// replacing the byteplus-sdk types
+
+// Constants for chat message roles
+type ChatMessageRole string
+
+const (
+	ChatMessageRoleSystem    ChatMessageRole = "system"
+	ChatMessageRoleUser      ChatMessageRole = "user"
+	ChatMessageRoleAssistant ChatMessageRole = "assistant"
+	ChatMessageRoleTool      ChatMessageRole = "tool"
+)
+
+// Constants for content part types
+type ChatCompletionMessageContentPartType string
+
+const (
+	ChatCompletionMessageContentPartTypeText     ChatCompletionMessageContentPartType = "text"
+	ChatCompletionMessageContentPartTypeImageURL ChatCompletionMessageContentPartType = "image_url"
+)
+
+// Constants for tool types
+type ToolType string
+
+const (
+	ToolTypeFunction ToolType = "function"
+)
+
+// Constants for finish reasons
+type FinishReason string
+
+const (
+	FinishReasonNull      FinishReason = ""
+	FinishReasonStop      FinishReason = "stop"
+	FinishReasonLength    FinishReason = "length"
+	FinishReasonToolCalls FinishReason = "tool_calls"
+)
+
+// Constants for thinking types
+type ThinkingType string
+
+const (
+	ThinkingTypeEnabled ThinkingType = "enabled"
+)
+
+// Request types
+type CreateChatCompletionRequest struct {
+	Model       string                     `json:"model"`
+	Messages    []*ChatCompletionMessage   `json:"messages"`
+	MaxTokens   *int                       `json:"max_tokens,omitempty"`
+	Temperature *float32                   `json:"temperature,omitempty"`
+	TopP        *float32                   `json:"top_p,omitempty"`
+	Stop        []string                   `json:"stop,omitempty"`
+	Stream      *bool                      `json:"stream,omitempty"`
+	Tools       []*Tool                    `json:"tools,omitempty"`
+	Thinking    *Thinking                  `json:"thinking,omitempty"`
 }
 
-type ArkMessage struct {
-	Role            string        `json:"role"` // "system", "user", "assistant", "tool"
-	Content         interface{}   `json:"content,omitempty"` // string or []ArkContentPart
-	ReasoningContent string       `json:"reasoning_content,omitempty"` // 推理内容
-	ToolCalls       []ArkToolCall `json:"tool_calls,omitempty"`
-	ToolCallID      string        `json:"tool_call_id,omitempty"`
+type ChatCompletionMessage struct {
+	Role             ChatMessageRole               `json:"role"`
+	Content          *ChatCompletionMessageContent `json:"content,omitempty"`
+	ReasoningContent *string                       `json:"reasoning_content,omitempty"`
+	ToolCalls        []*ToolCall                   `json:"tool_calls,omitempty"`
+	ToolCallID       string                        `json:"tool_call_id,omitempty"`
 }
 
-type ArkContentPart struct {
-	Type     string        `json:"type"` // "text", "image_url"
-	Text     string        `json:"text,omitempty"`
-	ImageURL *ArkImageURL  `json:"image_url,omitempty"`
+type ChatCompletionMessageContent struct {
+	StringValue *string                             `json:"-"`
+	ListValue   []*ChatCompletionMessageContentPart `json:"-"`
 }
 
-type ArkImageURL struct {
-	URL string `json:"url"` // data:image/png;base64,xxx
+// Custom marshaling for ChatCompletionMessageContent
+func (c *ChatCompletionMessageContent) MarshalJSON() ([]byte, error) {
+	if c.StringValue != nil {
+		return json.Marshal(*c.StringValue)
+	}
+	if c.ListValue != nil {
+		return json.Marshal(c.ListValue)
+	}
+	return []byte("null"), nil
 }
 
-type ArkTool struct {
-	Type     string      `json:"type"` // "function"
-	Function ArkFunction `json:"function"`
+func (c *ChatCompletionMessageContent) UnmarshalJSON(data []byte) error {
+	// Try string first
+	if data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err == nil {
+			c.StringValue = &s
+			return nil
+		}
+	}
+	// Try array
+	var list []*ChatCompletionMessageContentPart
+	if err := json.Unmarshal(data, &list); err == nil {
+		c.ListValue = list
+		return nil
+	}
+	return nil
 }
 
-type ArkFunction struct {
+type ChatCompletionMessageContentPart struct {
+	Type     ChatCompletionMessageContentPartType `json:"type"`
+	Text     string                               `json:"text,omitempty"`
+	ImageURL *ChatMessageImageURL                 `json:"image_url,omitempty"`
+}
+
+type ChatMessageImageURL struct {
+	URL string `json:"url"`
+}
+
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     ToolType     `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type Tool struct {
+	Type     ToolType            `json:"type"`
+	Function *FunctionDefinition `json:"function"`
+}
+
+type FunctionDefinition struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description,omitempty"`
-	Parameters  map[string]interface{} `json:"parameters"`
+	Parameters  map[string]interface{} `json:"parameters,omitempty"`
 }
 
-type ArkToolCall struct {
-	ID       string      `json:"id"`
-	Type     string      `json:"type"` // "function"
-	Function ArkFunctionCall `json:"function"`
+type Thinking struct {
+	Type ThinkingType `json:"type"`
 }
 
-type ArkFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"` // JSON string
+// Response types
+type ChatCompletionResponse struct {
+	ID      string    `json:"id"`
+	Object  string    `json:"object"`
+	Created int64     `json:"created"`
+	Model   string    `json:"model"`
+	Choices []Choice  `json:"choices"`
+	Usage   Usage     `json:"usage"`
 }
 
-// ArkResponse represents the Volcengine Ark API response
-type ArkResponse struct {
-	ID      string      `json:"id"`
-	Object  string      `json:"object"` // "chat.completion"
-	Created int64       `json:"created"`
-	Model   string      `json:"model"`
-	Choices []ArkChoice `json:"choices"`
-	Usage   ArkUsage    `json:"usage"`
+type Choice struct {
+	Index        int                   `json:"index"`
+	Message      ChatCompletionMessage `json:"message"`
+	FinishReason FinishReason          `json:"finish_reason"`
 }
 
-type ArkChoice struct {
-	Index        int        `json:"index"`
-	Message      ArkMessage `json:"message"`
-	FinishReason string     `json:"finish_reason"` // "stop", "length", "tool_calls"
-}
-
-type ArkUsage struct {
+type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// Stream chunk types
-type ArkStreamChunk struct {
-	ID      string            `json:"id"`
-	Object  string            `json:"object"` // "chat.completion.chunk"
-	Created int64             `json:"created"`
-	Model   string            `json:"model"`
-	Choices []ArkStreamChoice `json:"choices"`
-	Usage   *ArkUsage         `json:"usage,omitempty"`
+// Stream response types
+type ChatCompletionStreamResponse struct {
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []StreamChoice `json:"choices"`
+	Usage   *Usage         `json:"usage,omitempty"`
 }
 
-type ArkStreamChoice struct {
-	Index        int              `json:"index"`
-	Delta        ArkMessageDelta  `json:"delta"`
-	FinishReason string           `json:"finish_reason,omitempty"`
+type StreamChoice struct {
+	Index        int          `json:"index"`
+	Delta        Delta        `json:"delta"`
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
 }
 
-type ArkMessageDelta struct {
-	Role             string        `json:"role,omitempty"`
-	Content          string        `json:"content,omitempty"`
-	ReasoningContent string        `json:"reasoning_content,omitempty"` // 推理内容增量
-	ToolCalls        []ArkToolCall `json:"tool_calls,omitempty"`
+type Delta struct {
+	Role             ChatMessageRole `json:"role,omitempty"`
+	Content          string          `json:"content,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []*ToolCall     `json:"tool_calls,omitempty"`
+}
+
+// Error types
+type APIError struct {
+	HTTPStatusCode int    `json:"-"`
+	Message        string `json:"message"`
+	Type           string `json:"type"`
+}
+
+func (e *APIError) Error() string {
+	return e.Message
+}
+
+type RequestError struct {
+	HTTPStatusCode int
+	Err            error
+}
+
+func (e *RequestError) Error() string {
+	return e.Err.Error()
 }

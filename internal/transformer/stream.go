@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 )
 
@@ -39,7 +38,7 @@ func NewStreamState(model string) *StreamState {
 }
 
 // TransformStreamChunk converts an Ark SDK stream chunk to Anthropic stream events
-func TransformStreamChunk(chunk *model.ChatCompletionStreamResponse, state *StreamState) []string {
+func TransformStreamChunk(chunk *types.ChatCompletionStreamResponse, state *StreamState) []string {
 	var events []string
 
 	// Send message_start if this is the first chunk
@@ -213,7 +212,7 @@ func TransformStreamChunk(chunk *model.ChatCompletionStreamResponse, state *Stre
 	}
 
 	// Handle finish
-	if choice.FinishReason != model.FinishReasonNull && choice.FinishReason != "" {
+	if choice.FinishReason != types.FinishReasonNull && choice.FinishReason != "" {
 		fmt.Printf("[StreamTransform] Received finish reason: %s\n", choice.FinishReason)
 		// Stop current content block
 		if state.CurrentBlock != nil {

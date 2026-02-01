@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 )
 
 // TransformResponse converts Ark SDK response to Anthropic response
-func TransformResponse(arkResp *model.ChatCompletionResponse, originalModel string) *types.AnthropicResponse {
+func TransformResponse(arkResp *types.ChatCompletionResponse, originalModel string) *types.AnthropicResponse {
 	if len(arkResp.Choices) == 0 {
 		return &types.AnthropicResponse{
 			ID:      generateMessageID(),
@@ -43,7 +42,7 @@ func TransformResponse(arkResp *model.ChatCompletionResponse, originalModel stri
 	}
 }
 
-func transformMessageContent(msg *model.ChatCompletionMessage) []types.ContentBlock {
+func transformMessageContent(msg *types.ChatCompletionMessage) []types.ContentBlock {
 	var blocks []types.ContentBlock
 
 	// Handle reasoning content first (if exists)
@@ -82,13 +81,13 @@ func transformMessageContent(msg *model.ChatCompletionMessage) []types.ContentBl
 	return blocks
 }
 
-func transformStopReason(arkReason model.FinishReason) string {
+func transformStopReason(arkReason types.FinishReason) string {
 	switch arkReason {
-	case model.FinishReasonStop:
+	case types.FinishReasonStop:
 		return "end_turn"
-	case model.FinishReasonLength:
+	case types.FinishReasonLength:
 		return "max_tokens"
-	case model.FinishReasonToolCalls:
+	case types.FinishReasonToolCalls:
 		return "tool_use"
 	default:
 		return "end_turn"

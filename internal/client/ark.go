@@ -9,10 +9,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime"
-	"github.com/byteplus-sdk/byteplus-go-sdk-v2/service/arkruntime/model"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/geminiwen/anthropic-to-ark/internal/errors"
+	"github.com/geminiwen/anthropic-to-ark/internal/types"
 )
 
 type ArkClient struct{}
@@ -22,14 +21,14 @@ type StreamReader struct {
 	resp   *http.Response
 }
 
-func (sr *StreamReader) Recv() (model.ChatCompletionStreamResponse, error) {
+func (sr *StreamReader) Recv() (types.ChatCompletionStreamResponse, error) {
 	for {
 		line, err := sr.reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
 				hlog.Infof("[StreamReader] Reached EOF")
 			}
-			return model.ChatCompletionStreamResponse{}, err
+			return types.ChatCompletionStreamResponse{}, err
 		}
 
 		line = bytes.TrimSpace(line)
@@ -51,7 +50,7 @@ func (sr *StreamReader) Recv() (model.ChatCompletionStreamResponse, error) {
 				if len(data) > 7 {
 					finalData := bytes.TrimSpace(data[7:])
 					hlog.Infof("[StreamReader] [DONE] message data: %s", string(finalData[:min(len(finalData), 200)]))
-					var chunk model.ChatCompletionStreamResponse
+					var chunk types.ChatCompletionStreamResponse
 					if err := json.Unmarshal(finalData, &chunk); err == nil {
 						// This is the final message with usage info
 						hlog.Infof("[StreamReader] Successfully parsed [DONE] message with usage")
@@ -61,10 +60,10 @@ func (sr *StreamReader) Recv() (model.ChatCompletionStreamResponse, error) {
 					}
 				}
 				// Regular [DONE] without data
-				return model.ChatCompletionStreamResponse{}, io.EOF
+				return types.ChatCompletionStreamResponse{}, io.EOF
 			}
 
-			var chunk model.ChatCompletionStreamResponse
+			var chunk types.ChatCompletionStreamResponse
 			if err := json.Unmarshal(data, &chunk); err != nil {
 				hlog.Warnf("[StreamReader] Failed to parse chunk: %v, data: %s", err, string(data[:min(len(data), 100)]))
 				continue
@@ -94,22 +93,52 @@ func NewArkClient() *ArkClient {
 }
 
 // SendRequest sends a non-streaming request to Ark API
-func (c *ArkClient) SendRequest(ctx context.Context, req *model.CreateChatCompletionRequest, apiKey, baseURL string) (*model.ChatCompletionResponse, error) {
-	// Create a new client with the API key for this request
-	client := arkruntime.NewClientWithApiKey(apiKey,
-		arkruntime.WithBaseUrl(baseURL),
-	)
-
-	resp, err := client.CreateChatCompletion(ctx, req)
+func (c *ArkClient) SendRequest(ctx context.Context, req *types.CreateChatCompletionRequest, apiKey, baseURL string) (*types.ChatCompletionResponse, error) {
+	// Marshal request to JSON
+	reqBody, err := json.Marshal(req)
 	if err != nil {
-		return nil, handleError(err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	return &resp, nil
+	// Create HTTP request
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/chat/completions", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		return nil, handleHTTPError(resp.StatusCode, body)
+	}
+
+	// Parse response
+	var chatResp types.ChatCompletionResponse
+	if err := json.Unmarshal(body, &chatResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &chatResp, nil
 }
 
 // StreamRequest sends a streaming request to Ark API
-func (c *ArkClient) StreamRequest(ctx context.Context, req *model.CreateChatCompletionRequest, apiKey, baseURL string) (*StreamReader, error) {
+func (c *ArkClient) StreamRequest(ctx context.Context, req *types.CreateChatCompletionRequest, apiKey, baseURL string) (*StreamReader, error) {
 	hlog.Infof("[ArkClient] Creating stream request to: %s", baseURL)
 
 	// Marshal request to JSON
@@ -157,18 +186,17 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-// handleError converts SDK errors to our error types
-func handleError(err error) error {
-	if apiErr, ok := err.(*model.APIError); ok {
-		errorType := errors.MapHTTPStatusToErrorType(apiErr.HTTPStatusCode)
+// handleHTTPError converts HTTP errors to our error types
+func handleHTTPError(statusCode int, body []byte) error {
+	// Try to parse error response
+	var apiErr types.APIError
+	if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Message != "" {
+		apiErr.HTTPStatusCode = statusCode
+		errorType := errors.MapHTTPStatusToErrorType(statusCode)
 		return errors.NewAPIError(errorType, apiErr.Message)
 	}
 
-	if reqErr, ok := err.(*model.RequestError); ok {
-		errorType := errors.MapHTTPStatusToErrorType(reqErr.HTTPStatusCode)
-		return errors.NewAPIError(errorType, reqErr.Err.Error())
-	}
-
-	// Unknown error
-	return errors.NewAPIError(errors.APIErrorType, err.Error())
+	// Fallback to generic error
+	errorType := errors.MapHTTPStatusToErrorType(statusCode)
+	return errors.NewAPIError(errorType, fmt.Sprintf("HTTP %d: %s", statusCode, string(body)))
 }
