@@ -1,4 +1,4 @@
-package transformer
+package ark
 
 import (
 	"encoding/json"
@@ -38,7 +38,7 @@ func NewStreamState(model string) *StreamState {
 }
 
 // TransformStreamChunk converts an Ark SDK stream chunk to Anthropic stream events
-func TransformStreamChunk(chunk *types.ChatCompletionStreamResponse, state *StreamState) []string {
+func TransformStreamChunk(chunk *ChatCompletionStreamResponse, state *StreamState) []string {
 	var events []string
 
 	// Send message_start if this is the first chunk
@@ -212,7 +212,7 @@ func TransformStreamChunk(chunk *types.ChatCompletionStreamResponse, state *Stre
 	}
 
 	// Handle finish
-	if choice.FinishReason != types.FinishReasonNull && choice.FinishReason != "" {
+	if choice.FinishReason != FinishReasonNull && choice.FinishReason != "" {
 		fmt.Printf("[StreamTransform] Received finish reason: %s\n", choice.FinishReason)
 		// Stop current content block
 		if state.CurrentBlock != nil {

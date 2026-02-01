@@ -8,20 +8,19 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/geminiwen/anthropic-to-ark/internal/client"
+	"github.com/geminiwen/anthropic-to-ark/adapter/ark"
 	"github.com/geminiwen/anthropic-to-ark/internal/errors"
-	"github.com/geminiwen/anthropic-to-ark/internal/transformer"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 	"github.com/hertz-contrib/sse"
 )
 
 type MessagesHandler struct {
-	arkClient *client.ArkClient
+	arkClient *ark.Client
 }
 
 func NewMessagesHandler() *MessagesHandler {
 	return &MessagesHandler{
-		arkClient: client.NewArkClient(),
+		arkClient: ark.NewClient(),
 	}
 }
 
@@ -67,7 +66,7 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	hlog.Infof("[Handler] Using endpoint: %s", arkEndpoint)
 
 	// Transform request
-	arkReq, err := transformer.TransformRequest(&req, arkEndpoint)
+	arkReq, err := ark.TransformRequest(&req, arkEndpoint)
 	if err != nil {
 		if apiErr, ok := err.(*errors.APIError); ok {
 			h.sendError(c, consts.StatusBadRequest, apiErr)
@@ -87,7 +86,7 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	}
 }
 
-func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestContext, arkReq *types.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
+func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestContext, arkReq *ark.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
 	// Send request to Ark
 	arkResp, err := h.arkClient.SendRequest(ctx, arkReq, apiKey, arkBaseURL)
 	if err != nil {
@@ -101,12 +100,12 @@ func (h *MessagesHandler) handleNonStream(ctx context.Context, c *app.RequestCon
 	}
 
 	// Transform response
-	anthropicResp := transformer.TransformResponse(arkResp, originalModel)
+	anthropicResp := ark.TransformResponse(arkResp, originalModel)
 
 	c.JSON(consts.StatusOK, anthropicResp)
 }
 
-func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContext, arkReq *types.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
+func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContext, arkReq *ark.CreateChatCompletionRequest, originalModel, apiKey, arkBaseURL string) {
 	hlog.Infof("[Stream] Starting stream request for model: %s", originalModel)
 
 	// Send streaming request
@@ -128,7 +127,7 @@ func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContex
 	hlog.Infof("[Stream] SSE stream created, starting to receive chunks")
 
 	// Stream events
-	state := transformer.NewStreamState(originalModel)
+	state := ark.NewStreamState(originalModel)
 	chunkCount := 0
 
 	for {
@@ -162,7 +161,7 @@ func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContex
 		}
 
 		// Transform chunk to Anthropic events
-		events := transformer.TransformStreamChunk(&chunk, state)
+		events := ark.TransformStreamChunk(&chunk, state)
 		hlog.Infof("[Stream] Transformed chunk #%d into %d events", chunkCount, len(events))
 
 		// Parse and publish each event using SSE stream

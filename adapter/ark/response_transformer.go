@@ -1,4 +1,4 @@
-package transformer
+package ark
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 )
 
 // TransformResponse converts Ark SDK response to Anthropic response
-func TransformResponse(arkResp *types.ChatCompletionResponse, originalModel string) *types.AnthropicResponse {
+func TransformResponse(arkResp *ChatCompletionResponse, originalModel string) *types.AnthropicResponse {
 	if len(arkResp.Choices) == 0 {
 		return &types.AnthropicResponse{
 			ID:      generateMessageID(),
@@ -42,7 +42,7 @@ func TransformResponse(arkResp *types.ChatCompletionResponse, originalModel stri
 	}
 }
 
-func transformMessageContent(msg *types.ChatCompletionMessage) []types.ContentBlock {
+func transformMessageContent(msg *ChatCompletionMessage) []types.ContentBlock {
 	var blocks []types.ContentBlock
 
 	// Handle reasoning content first (if exists)
@@ -81,13 +81,13 @@ func transformMessageContent(msg *types.ChatCompletionMessage) []types.ContentBl
 	return blocks
 }
 
-func transformStopReason(arkReason types.FinishReason) string {
+func transformStopReason(arkReason FinishReason) string {
 	switch arkReason {
-	case types.FinishReasonStop:
+	case FinishReasonStop:
 		return "end_turn"
-	case types.FinishReasonLength:
+	case FinishReasonLength:
 		return "max_tokens"
-	case types.FinishReasonToolCalls:
+	case FinishReasonToolCalls:
 		return "tool_use"
 	default:
 		return "end_turn"
