@@ -10,6 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/geminiwen/anthropic-to-ark/adapter/ark"
 	"github.com/geminiwen/anthropic-to-ark/adapter/dashscope"
+	"github.com/geminiwen/anthropic-to-ark/adapter/openai"
 	"github.com/geminiwen/anthropic-to-ark/internal/errors"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 	"github.com/hertz-contrib/sse"
@@ -18,12 +19,14 @@ import (
 type MessagesHandler struct {
 	arkClient       *ark.Client
 	dashscopeClient *dashscope.Client
+	openaiClient    *openai.Client
 }
 
 func NewMessagesHandler() *MessagesHandler {
 	return &MessagesHandler{
 		arkClient:       ark.NewClient(),
 		dashscopeClient: dashscope.NewClient(),
+		openaiClient:    openai.NewClient(),
 	}
 }
 
@@ -53,8 +56,10 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 		h.handleArk(ctx, c, apiKey)
 	case "dashscope":
 		h.handleDashScope(ctx, c, apiKey)
+	case "openai":
+		h.handleOpenAI(ctx, c, apiKey)
 	default:
-		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Invalid X-Autory-Provider. Must be 'ark' or 'dashscope'"))
+		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Invalid X-Autory-Provider. Must be 'ark', 'dashscope', or 'openai'"))
 	}
 }
 
@@ -532,6 +537,153 @@ func (h *MessagesHandler) handleResponsesStream(ctx context.Context, c *app.Requ
 	}
 
 	hlog.Infof("[ResponsesStream] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
+		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
+}
+
+// handleOpenAI handles requests using OpenAI Responses API adapter
+func (h *MessagesHandler) handleOpenAI(ctx context.Context, c *app.RequestContext, apiKey string) {
+	// Extract OpenAI base URL from X-Autory-OpenAI-Endpoint header
+	openaiBaseURL := string(c.GetHeader("X-Autory-OpenAI-Endpoint"))
+	if openaiBaseURL == "" {
+		// Default to OpenAI API
+		openaiBaseURL = "https://api.openai.com"
+	}
+	// Remove trailing slash if present
+	openaiBaseURL = strings.TrimSuffix(openaiBaseURL, "/")
+
+	hlog.Infof("[Handler] Using OpenAI base URL: %s", openaiBaseURL)
+
+	// Parse request
+	var req types.AnthropicRequest
+	if err := c.Bind(&req); err != nil {
+		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Invalid request body: "+err.Error()))
+		return
+	}
+
+	hlog.Infof("[Handler] OpenAI - Received request - Model: %s, Stream: %v, Messages: %d, MaxTokens: %d, Tools: %d",
+		req.Model, req.Stream, len(req.Messages), req.MaxTokens, len(req.Tools))
+
+	// Use model from request
+	model := req.Model
+	if model == "" {
+		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Missing model in request"))
+		return
+	}
+
+	// Transform request
+	openaiReq, err := openai.TransformRequest(&req, model)
+	if err != nil {
+		hlog.Errorf("[Handler] OpenAI - Transform error: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			h.sendError(c, consts.StatusBadRequest, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+
+	hlog.Infof("[Handler] OpenAI - Transformed request - Model: %s, Instructions: %d chars",
+		openaiReq.Model, len(openaiReq.Instructions))
+
+	if req.Stream {
+		hlog.Infof("[Handler] OpenAI - Routing to stream handler")
+		h.handleOpenAIStream(ctx, c, openaiReq, req.Model, apiKey, openaiBaseURL)
+	} else {
+		hlog.Infof("[Handler] OpenAI - Routing to non-stream handler")
+		h.handleOpenAINonStream(ctx, c, openaiReq, req.Model, apiKey, openaiBaseURL)
+	}
+}
+
+func (h *MessagesHandler) handleOpenAINonStream(ctx context.Context, c *app.RequestContext, openaiReq *openai.ResponsesRequest, originalModel, apiKey, baseURL string) {
+	hlog.Infof("[OpenAI] Sending non-stream request")
+
+	// Send request to OpenAI
+	openaiResp, err := h.openaiClient.SendRequest(ctx, openaiReq, apiKey, baseURL)
+	if err != nil {
+		hlog.Errorf("[OpenAI] Request failed: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+
+	hlog.Infof("[OpenAI] Response received - ID: %s, Status: %s", openaiResp.ID, openaiResp.Status)
+	if openaiResp.Usage != nil {
+		hlog.Infof("[OpenAI] Usage - Input: %d, Output: %d, Total: %d",
+			openaiResp.Usage.InputTokens, openaiResp.Usage.OutputTokens, openaiResp.Usage.TotalTokens)
+	}
+
+	// Transform response
+	anthropicResp := openai.TransformResponse(openaiResp, originalModel)
+	hlog.Infof("[OpenAI] Transformed to Anthropic response - Content blocks: %d", len(anthropicResp.Content))
+
+	c.JSON(consts.StatusOK, anthropicResp)
+}
+
+func (h *MessagesHandler) handleOpenAIStream(ctx context.Context, c *app.RequestContext, openaiReq *openai.ResponsesRequest, originalModel, apiKey, baseURL string) {
+	hlog.Infof("[OpenAI Stream] Starting stream request for model: %s", originalModel)
+
+	// Send streaming request
+	streamReader, err := h.openaiClient.StreamRequest(ctx, openaiReq, apiKey, baseURL)
+	if err != nil {
+		hlog.Errorf("[OpenAI Stream] Failed to create stream: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+	defer streamReader.Close()
+
+	// Create SSE stream
+	stream := sse.NewStream(c)
+	hlog.Infof("[OpenAI Stream] SSE stream created, starting to receive chunks")
+
+	// Stream events
+	state := openai.NewStreamState(originalModel)
+	chunkCount := 0
+
+	for {
+		event, err := streamReader.Recv()
+		if err != nil {
+			if err != io.EOF {
+				hlog.Errorf("[OpenAI Stream] Error reading stream event: %v", err)
+			} else {
+				hlog.Infof("[OpenAI Stream] Stream ended normally (EOF)")
+			}
+			break
+		}
+
+		chunkCount++
+		hlog.Infof("[OpenAI Stream] Received event #%d - Type: %s", chunkCount, event.Type)
+
+		// Transform event to Anthropic events
+		events := openai.TransformStreamChunk(event, state)
+		hlog.Infof("[OpenAI Stream] Transformed event #%d into %d events", chunkCount, len(events))
+
+		// Parse and publish each event using SSE stream
+		for _, eventStr := range events {
+			eventType, eventData := parseSSEEvent(eventStr)
+			if eventData != "" {
+				sseEvent := &sse.Event{
+					Event: eventType,
+					Data:  []byte(eventData),
+				}
+				if err := stream.Publish(sseEvent); err != nil {
+					hlog.Errorf("[OpenAI Stream] Error publishing event: %v", err)
+					return
+				}
+				hlog.Debugf("[OpenAI Stream] Published event: %s", eventType)
+			}
+		}
+	}
+
+	hlog.Infof("[OpenAI Stream] Stream completed - Events: %d, Input tokens: %d, Output tokens: %d, Total: %d",
 		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
 }
 
