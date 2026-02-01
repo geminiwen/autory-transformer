@@ -14,19 +14,21 @@ type GenerationInput struct {
 }
 
 type Message struct {
-	Role    string `json:"role"`    // system, user, assistant
-	Content string `json:"content"`
+	Role             string  `json:"role"`                        // system, user, assistant
+	Content          string  `json:"content"`
+	ReasoningContent *string `json:"reasoning_content,omitempty"` // Reasoning/thinking content
 }
 
 type GenerationParameters struct {
-	ResultFormat string   `json:"result_format,omitempty"` // message
-	Temperature  *float64 `json:"temperature,omitempty"`
-	TopP         *float64 `json:"top_p,omitempty"`
-	TopK         *int     `json:"top_k,omitempty"`
-	MaxTokens    *int     `json:"max_tokens,omitempty"`
-	Stop         []string `json:"stop,omitempty"`
-	Seed         *int     `json:"seed,omitempty"`
-	Stream       *bool    `json:"incremental_output,omitempty"` // DashScope uses incremental_output for streaming
+	ResultFormat   string   `json:"result_format,omitempty"` // message
+	Temperature    *float64 `json:"temperature,omitempty"`
+	TopP           *float64 `json:"top_p,omitempty"`
+	TopK           *int     `json:"top_k,omitempty"`
+	MaxTokens      *int     `json:"max_tokens,omitempty"`
+	Stop           []string `json:"stop,omitempty"`
+	Seed           *int     `json:"seed,omitempty"`
+	Stream         *bool    `json:"incremental_output,omitempty"` // DashScope uses incremental_output for streaming
+	EnableThinking *bool    `json:"enable_thinking,omitempty"`    // Enable thinking/reasoning mode
 }
 
 // Response types

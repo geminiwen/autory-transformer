@@ -55,11 +55,62 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 
 	choice := chunk.Output.Choices[0]
 
-	// Handle content delta
+	// Handle reasoning content delta (thinking)
+	if choice.Message != nil && choice.Message.ReasoningContent != nil && *choice.Message.ReasoningContent != "" {
+		fmt.Printf("[DashScope StreamTransform] Processing reasoning_content delta, length: %d\n", len(*choice.Message.ReasoningContent))
+
+		// Start thinking block if needed
+		if state.CurrentBlock == nil || state.CurrentBlock.Type != "thinking" {
+			if state.CurrentBlock != nil {
+				events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
+					Type:  "content_block_stop",
+					Index: &state.ContentIndex,
+				}))
+				state.ContentIndex++
+			}
+
+			emptyStr := ""
+			state.CurrentBlock = &types.ContentBlock{
+				Type:      "thinking",
+				Thinking:  &emptyStr,
+				Signature: &emptyStr,
+			}
+			events = append(events, formatStreamEvent("content_block_start", &types.StreamEvent{
+				Type:         "content_block_start",
+				Index:        &state.ContentIndex,
+				ContentBlock: state.CurrentBlock,
+			}))
+		}
+
+		// Send thinking delta
+		events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+			Type:  "content_block_delta",
+			Index: &state.ContentIndex,
+			Delta: &types.ThinkingDelta{
+				Type:     "thinking_delta",
+				Thinking: *choice.Message.ReasoningContent,
+			},
+		}))
+	}
+
+	// Handle content delta (normal text)
 	if choice.Message != nil && choice.Message.Content != "" {
+		fmt.Printf("[DashScope StreamTransform] Processing content delta, length: %d\n", len(choice.Message.Content))
+
 		// Start text block if needed
 		if state.CurrentBlock == nil || state.CurrentBlock.Type != "text" {
 			if state.CurrentBlock != nil {
+				// If previous block was thinking, send signature_delta first
+				if state.CurrentBlock.Type == "thinking" {
+					events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+						Type:  "content_block_delta",
+						Index: &state.ContentIndex,
+						Delta: &types.SignatureDelta{
+							Type:      "signature_delta",
+							Signature: generatePlaceholderSignature(),
+						},
+					}))
+				}
 				events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
 					Type:  "content_block_stop",
 					Index: &state.ContentIndex,
@@ -96,6 +147,17 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 
 		// Stop current content block
 		if state.CurrentBlock != nil {
+			// If current block is thinking, send signature_delta first
+			if state.CurrentBlock.Type == "thinking" {
+				events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+					Type:  "content_block_delta",
+					Index: &state.ContentIndex,
+					Delta: &types.SignatureDelta{
+						Type:      "signature_delta",
+						Signature: generatePlaceholderSignature(),
+					},
+				}))
+			}
 			events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
 				Type:  "content_block_stop",
 				Index: &state.ContentIndex,
@@ -135,4 +197,10 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 func formatStreamEvent(eventType string, data interface{}) string {
 	jsonData, _ := json.Marshal(data)
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, string(jsonData))
+}
+
+func generatePlaceholderSignature() string {
+	// Generate a placeholder signature for thinking blocks
+	// Note: This is not a valid Anthropic signature, but is needed for stream format compatibility
+	return "autory"
 }

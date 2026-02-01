@@ -45,6 +45,12 @@ func TransformRequest(req *types.AnthropicRequest, model string) (*GenerationReq
 		dashReq.Parameters.Stop = req.StopSequences
 	}
 
+	// Enable thinking mode if requested
+	if req.Thinking != nil {
+		enableThinking := true
+		dashReq.Parameters.EnableThinking = &enableThinking
+	}
+
 	return dashReq, nil
 }
 
@@ -59,10 +65,7 @@ func validateRequest(req *types.AnthropicRequest) error {
 		return errors.NewInvalidRequestError("Tool use is not yet supported for DashScope adapter")
 	}
 
-	// Thinking mode not supported
-	if req.Thinking != nil {
-		return errors.NewInvalidRequestError("Extended thinking is not supported for DashScope adapter")
-	}
+	// Thinking mode is now supported - no error needed
 
 	// Check for unsupported content types
 	for _, msg := range req.Messages {

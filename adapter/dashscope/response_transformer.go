@@ -23,6 +23,15 @@ func TransformResponse(dashResp *GenerationResponse, originalModel string) *type
 	choice := dashResp.Output.Choices[0]
 	var content []types.ContentBlock
 
+	// Handle reasoning content first (thinking)
+	if choice.Message != nil && choice.Message.ReasoningContent != nil && *choice.Message.ReasoningContent != "" {
+		content = append(content, types.ContentBlock{
+			Type:     "thinking",
+			Thinking: choice.Message.ReasoningContent,
+		})
+	}
+
+	// Handle text content
 	if choice.Message != nil && choice.Message.Content != "" {
 		content = append(content, types.ContentBlock{
 			Type: "text",
