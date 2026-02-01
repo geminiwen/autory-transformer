@@ -9,18 +9,21 @@ import (
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/geminiwen/anthropic-to-ark/adapter/ark"
+	"github.com/geminiwen/anthropic-to-ark/adapter/dashscope"
 	"github.com/geminiwen/anthropic-to-ark/internal/errors"
 	"github.com/geminiwen/anthropic-to-ark/internal/types"
 	"github.com/hertz-contrib/sse"
 )
 
 type MessagesHandler struct {
-	arkClient *ark.Client
+	arkClient       *ark.Client
+	dashscopeClient *dashscope.Client
 }
 
 func NewMessagesHandler() *MessagesHandler {
 	return &MessagesHandler{
-		arkClient: ark.NewClient(),
+		arkClient:       ark.NewClient(),
+		dashscopeClient: dashscope.NewClient(),
 	}
 }
 
@@ -36,6 +39,26 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// Extract provider (ark or dashscope)
+	provider := strings.ToLower(string(c.GetHeader("X-Autory-Provider")))
+	if provider == "" {
+		provider = "ark" // Default to ark for backward compatibility
+	}
+
+	hlog.Infof("[Handler] Provider: %s", provider)
+
+	// Route to appropriate provider
+	switch provider {
+	case "ark":
+		h.handleArk(ctx, c, apiKey)
+	case "dashscope":
+		h.handleDashScope(ctx, c, apiKey)
+	default:
+		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Invalid X-Autory-Provider. Must be 'ark' or 'dashscope'"))
+	}
+}
+
+func (h *MessagesHandler) handleArk(ctx context.Context, c *app.RequestContext, apiKey string) {
 	// Extract Ark base URL from X-Autory-Ark-Endpoint header
 	arkBaseURL := string(c.GetHeader("X-Autory-Ark-Endpoint"))
 	if arkBaseURL == "" {
@@ -208,7 +231,184 @@ func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContex
 		}
 	}
 
-	hlog.Infof("[Stream] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
+	hlog.Infof("[Handler] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
+		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
+}
+
+// handleDashScope handles requests using DashScope adapter
+func (h *MessagesHandler) handleDashScope(ctx context.Context, c *app.RequestContext, apiKey string) {
+	// Extract DashScope base URL from X-Autory-Dashscope-Endpoint header
+	dashscopeBaseURL := string(c.GetHeader("X-Autory-Dashscope-Endpoint"))
+	if dashscopeBaseURL == "" {
+		// Default to China region
+		dashscopeBaseURL = "https://dashscope.aliyuncs.com/api/v1"
+	}
+	// Remove trailing slash if present
+	dashscopeBaseURL = strings.TrimSuffix(dashscopeBaseURL, "/")
+
+	hlog.Infof("[Handler] Using DashScope base URL: %s", dashscopeBaseURL)
+
+	// Parse request
+	var req types.AnthropicRequest
+	if err := c.Bind(&req); err != nil {
+		h.sendError(c, consts.StatusBadRequest, errors.NewInvalidRequestError("Invalid request body: "+err.Error()))
+		return
+	}
+
+	hlog.Infof("[Handler] DashScope - Received request - Model: %s, Stream: %v, Messages: %d, MaxTokens: %d, Thinking: %v, Tools: %d",
+		req.Model, req.Stream, len(req.Messages), req.MaxTokens, req.Thinking != nil, len(req.Tools))
+
+	// Log request details for debugging
+	if len(req.Messages) > 0 {
+		hlog.Infof("[Handler] DashScope - First message role: %s", req.Messages[0].Role)
+	}
+	if req.Thinking != nil {
+		hlog.Infof("[Handler] DashScope - Thinking mode enabled: %+v", req.Thinking)
+	}
+	if len(req.Tools) > 0 {
+		hlog.Infof("[Handler] DashScope - Tools provided: %d tools", len(req.Tools))
+		for i, tool := range req.Tools {
+			hlog.Infof("[Handler] DashScope - Tool %d: %s - %s", i, tool.Name, tool.Description)
+		}
+	}
+
+	// Transform request
+	dashReq, err := dashscope.TransformRequest(&req, req.Model)
+	if err != nil {
+		hlog.Errorf("[Handler] DashScope - Transform error: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			h.sendError(c, consts.StatusBadRequest, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+
+	hlog.Infof("[Handler] DashScope - Transformed request - Model: %s, Messages: %d, Parameters: %+v",
+		dashReq.Model, len(dashReq.Input.Messages), dashReq.Parameters)
+
+	// Handle streaming vs non-streaming
+	if req.Stream {
+		hlog.Infof("[Handler] DashScope - Routing to stream handler")
+		h.handleDashScopeStream(ctx, c, dashReq, req.Model, apiKey, dashscopeBaseURL)
+	} else {
+		hlog.Infof("[Handler] DashScope - Routing to non-stream handler")
+		h.handleDashScopeNonStream(ctx, c, dashReq, req.Model, apiKey, dashscopeBaseURL)
+	}
+}
+
+func (h *MessagesHandler) handleDashScopeNonStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string) {
+	hlog.Infof("[DashScope] Sending non-stream request")
+
+	// Send request to DashScope
+	dashResp, err := h.dashscopeClient.SendRequest(ctx, dashReq, apiKey, baseURL)
+	if err != nil {
+		hlog.Errorf("[DashScope] Request failed: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+
+	hlog.Infof("[DashScope] Response received - RequestID: %s", dashResp.RequestID)
+	if dashResp.Output != nil && len(dashResp.Output.Choices) > 0 {
+		choice := dashResp.Output.Choices[0]
+		hlog.Infof("[DashScope] Choice - FinishReason: %s, Content length: %d",
+			choice.FinishReason, len(choice.Message.Content))
+		if choice.Message.ReasoningContent != nil {
+			hlog.Infof("[DashScope] ReasoningContent length: %d", len(*choice.Message.ReasoningContent))
+		}
+	}
+	if dashResp.Usage != nil {
+		hlog.Infof("[DashScope] Usage - Input: %d, Output: %d, Total: %d",
+			dashResp.Usage.InputTokens, dashResp.Usage.OutputTokens, dashResp.Usage.TotalTokens)
+	}
+
+	// Transform response
+	anthropicResp := dashscope.TransformResponse(dashResp, originalModel)
+	hlog.Infof("[DashScope] Transformed to Anthropic response - Content blocks: %d", len(anthropicResp.Content))
+
+	c.JSON(consts.StatusOK, anthropicResp)
+}
+
+func (h *MessagesHandler) handleDashScopeStream(ctx context.Context, c *app.RequestContext, dashReq *dashscope.GenerationRequest, originalModel, apiKey, baseURL string) {
+	hlog.Infof("[DashScope Stream] Starting stream request for model: %s", originalModel)
+
+	// Send streaming request
+	streamReader, err := h.dashscopeClient.StreamRequest(ctx, dashReq, apiKey, baseURL)
+	if err != nil {
+		hlog.Errorf("[DashScope Stream] Failed to create stream: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+	defer streamReader.Close()
+
+	// Create SSE stream
+	stream := sse.NewStream(c)
+	hlog.Infof("[DashScope Stream] SSE stream created, starting to receive chunks")
+
+	// Stream events
+	state := dashscope.NewStreamState(originalModel)
+	chunkCount := 0
+
+	for {
+		chunk, err := streamReader.Recv()
+		if err != nil {
+			if err != io.EOF {
+				hlog.Errorf("[DashScope Stream] Error reading stream chunk: %v", err)
+			} else {
+				hlog.Infof("[DashScope Stream] Stream ended normally (EOF)")
+			}
+			break
+		}
+
+		chunkCount++
+		hlog.Infof("[DashScope Stream] Received chunk #%d - RequestID: %s", chunkCount, chunk.RequestID)
+
+		if chunk.Output != nil && len(chunk.Output.Choices) > 0 {
+			choice := chunk.Output.Choices[0]
+			contentLen := 0
+			reasoningLen := 0
+			if choice.Message != nil {
+				contentLen = len(choice.Message.Content)
+				if choice.Message.ReasoningContent != nil {
+					reasoningLen = len(*choice.Message.ReasoningContent)
+				}
+			}
+			hlog.Infof("[DashScope Stream] Chunk #%d - Content: %d chars, Reasoning: %d chars, FinishReason: %s",
+				chunkCount, contentLen, reasoningLen, choice.FinishReason)
+		}
+
+		// Transform chunk to Anthropic events
+		events := dashscope.TransformStreamChunk(&chunk, state)
+		hlog.Infof("[DashScope Stream] Transformed chunk #%d into %d events", chunkCount, len(events))
+
+		// Parse and publish each event using SSE stream
+		for _, eventStr := range events {
+			eventType, eventData := parseSSEEvent(eventStr)
+			if eventData != "" {
+				sseEvent := &sse.Event{
+					Event: eventType,
+					Data:  []byte(eventData),
+				}
+				if err := stream.Publish(sseEvent); err != nil {
+					hlog.Errorf("[DashScope Stream] Error publishing event: %v", err)
+					return
+				}
+				hlog.Debugf("[DashScope Stream] Published event: %s", eventType)
+			}
+		}
+	}
+
+	hlog.Infof("[DashScope Stream] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
 		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
 }
 
