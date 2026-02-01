@@ -87,6 +87,8 @@ func transformStopReason(dashReason string) string {
 		return "end_turn"
 	case "length":
 		return "max_tokens"
+	case "tool_calls":
+		return "tool_use"
 	default:
 		return "end_turn"
 	}

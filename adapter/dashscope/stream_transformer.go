@@ -10,20 +10,29 @@ import (
 
 // StreamState tracks the state of streaming conversion for DashScope
 type StreamState struct {
-	MessageID    string
-	Model        string
-	ContentIndex int
-	CurrentBlock *types.ContentBlock
-	InputTokens  int
-	OutputTokens int
-	HasStarted   bool
+	MessageID      string
+	Model          string
+	ContentIndex   int
+	CurrentBlock   *types.ContentBlock
+	InputTokens    int
+	OutputTokens   int
+	HasStarted     bool
+	ToolCallBuffer map[int]*ToolCallBuffer
+}
+
+type ToolCallBuffer struct {
+	Index           int
+	ID              string
+	Name            string
+	ArgumentsBuffer string
 }
 
 func NewStreamState(model string) *StreamState {
 	return &StreamState{
-		MessageID:    generateMessageID(),
-		Model:        model,
-		ContentIndex: 0,
+		MessageID:      generateMessageID(),
+		Model:          model,
+		ContentIndex:   0,
+		ToolCallBuffer: make(map[int]*ToolCallBuffer),
 	}
 }
 
@@ -163,6 +172,76 @@ func TransformStreamChunk(chunk *GenerationStreamResponse, state *StreamState) [
 				Text: textContent,
 			},
 		}))
+	}
+
+	// Handle tool calls delta
+	if choice.Message != nil && len(choice.Message.ToolCalls) > 0 {
+		fmt.Printf("[DashScope StreamTransform] Processing tool_calls, count: %d\n", len(choice.Message.ToolCalls))
+
+		for _, toolCall := range choice.Message.ToolCalls {
+			// DashScope doesn't provide index in stream, use ID or default to 0
+			index := 0
+
+			buffer, exists := state.ToolCallBuffer[index]
+			if !exists {
+				// Start new tool call block
+				if state.CurrentBlock != nil {
+					// Stop previous content block (thinking or text)
+					if state.CurrentBlock.Type == "thinking" {
+						events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+							Type:  "content_block_delta",
+							Index: &state.ContentIndex,
+							Delta: &types.SignatureDelta{
+								Type:      "signature_delta",
+								Signature: generatePlaceholderSignature(),
+							},
+						}))
+					}
+					events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
+						Type:  "content_block_stop",
+						Index: &state.ContentIndex,
+					}))
+					state.ContentIndex++
+				}
+
+				buffer = &ToolCallBuffer{
+					Index: index,
+					ID:    toolCall.ID,
+					Name:  toolCall.Function.Name,
+				}
+				state.ToolCallBuffer[index] = buffer
+
+				state.CurrentBlock = &types.ContentBlock{
+					Type: "tool_use",
+					ID:   toolCall.ID,
+					Name: toolCall.Function.Name,
+				}
+
+				events = append(events, formatStreamEvent("content_block_start", &types.StreamEvent{
+					Type:         "content_block_start",
+					Index:        &state.ContentIndex,
+					ContentBlock: state.CurrentBlock,
+				}))
+
+				fmt.Printf("[DashScope StreamTransform] Started tool_use block - ID: %s, Name: %s\n", toolCall.ID, toolCall.Function.Name)
+			}
+
+			// Accumulate and send arguments delta
+			if toolCall.Function.Arguments != "" {
+				buffer.ArgumentsBuffer += toolCall.Function.Arguments
+
+				events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+					Type:  "content_block_delta",
+					Index: &state.ContentIndex,
+					Delta: &types.InputJSONDelta{
+						Type:        "input_json_delta",
+						PartialJSON: toolCall.Function.Arguments,
+					},
+				}))
+
+				fmt.Printf("[DashScope StreamTransform] Tool arguments delta, length: %d\n", len(toolCall.Function.Arguments))
+			}
+		}
 	}
 
 	// Handle finish (only when finish_reason is not "null")
