@@ -45,7 +45,13 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	// Remove trailing slash if present
 	arkBaseURL = strings.TrimSuffix(arkBaseURL, "/")
 
+	// Extract multimodal model name (optional, for PDF/document understanding)
+	multimodalModel := string(c.GetHeader("X-Autory-Ark-MultiModal"))
+
 	hlog.Infof("[Handler] Using Ark base URL: %s", arkBaseURL)
+	if multimodalModel != "" {
+		hlog.Infof("[Handler] Multimodal model configured: %s", multimodalModel)
+	}
 
 	// Parse request
 	var req types.AnthropicRequest
@@ -79,7 +85,18 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	// Determine which API to use based on content type
 	if responsesReq != nil {
 		// Use Responses API for document understanding
-		hlog.Infof("[Handler] Using Responses API for document understanding")
+		modelToUse := multimodalModel
+		if modelToUse == "" {
+			// If multimodal model not specified, use the original model from request
+			modelToUse = req.Model
+			hlog.Warnf("[Handler] X-Autory-Ark-MultiModal not specified, using request model: %s (may not support PDF/documents)", modelToUse)
+		} else {
+			hlog.Infof("[Handler] Using multimodal model from header: %s", modelToUse)
+		}
+
+		hlog.Infof("[Handler] Using Responses API for document understanding with model: %s", modelToUse)
+		// Set model for Responses API
+		responsesReq.Model = modelToUse
 		if req.Stream {
 			h.handleResponsesStream(ctx, c, responsesReq, req.Model, apiKey, arkBaseURL)
 		} else {

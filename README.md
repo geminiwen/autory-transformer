@@ -226,6 +226,20 @@ message = client.messages.create(
   - 这些参数在使用 thinking 模式时会被自动跳过，避免 API 错误
   - 推理模型使用固定的采样策略以确保推理质量
 
+### 自定义 HTTP Headers
+
+服务支持通过 HTTP Headers 进行动态配置（可选，用于覆盖环境变量）：
+
+- **X-Autory-Ark-Endpoint**: 火山方舟 API 基础 URL
+  - 用于动态指定不同的 API endpoint
+  - 示例: `https://ark.ap-southeast.bytepluses.com/api/v3`
+
+- **X-Autory-Ark-MultiModal**: 多模态模型名称
+  - 用于 PDF/文档理解等多模态任务
+  - 当请求包含 `document` 类型内容时，会使用此模型
+  - 如果未指定，则使用请求中的原始模型（可能不支持多模态）
+  - 示例: `seed-1-6-250915`
+
 ### 不支持的功能
 
 以下功能在请求时会返回 400 错误:
@@ -237,15 +251,21 @@ message = client.messages.create(
 
 从版本 1.1.0 开始，Autory Transformer 支持 PDF 文档处理：
 
+**特性**：
 - **自动 API 切换**: 当请求中包含 `document` 类型内容时，自动切换到火山方舟 Responses API
 - **格式转换**: Anthropic 的 `document` 类型会被转换为 Responses API 的 `input_file` 格式（Base64）
 - **流式和非流式**: 支持流式和非流式两种请求方式
 - **文件大小限制**: Base64 方式最大支持 50 MB 的 PDF 文件
 
-示例 Anthropic 请求格式：
+**模型选择**：
+- 使用 `X-Autory-Ark-MultiModal` header 指定多模态模型（推荐）
+  - 例如: `X-Autory-Ark-MultiModal: seed-1-6-250915`
+- 如果未指定，将使用请求中的原始模型（可能不支持 PDF）
+
+**示例 Anthropic 请求格式**：
 ```json
 {
-  "model": "seed-1-6-250915",
+  "model": "ep-20250201-xxxxx",
   "messages": [
     {
       "role": "user",
@@ -266,6 +286,17 @@ message = client.messages.create(
     }
   ]
 }
+```
+
+**请求 Headers 示例**：
+```bash
+curl https://your-proxy.com/v1/messages \
+  -H "Authorization: Bearer $ARK_API_KEY" \
+  -H "X-Autory-Ark-Endpoint: https://ark.ap-southeast.bytepluses.com/api/v3" \
+  -H "X-Autory-Ark-MultiModal: seed-1-6-250915" \
+  -H "Content-Type: application/json" \
+  -H "anthropic-version: 2023-06-01" \
+  -d @request.json
 ```
 
 ### 静默忽略的功能

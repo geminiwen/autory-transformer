@@ -136,7 +136,7 @@ func transformToResponsesContent(content interface{}) ([]*ResponsesContentItem, 
 				})
 
 			case "image":
-				// Convert image to input_file format
+				// Convert image to input_image format (Ark's preferred format for images)
 				source, ok := blockMap["source"].(map[string]interface{})
 				if !ok {
 					return nil, fmt.Errorf("invalid image source")
@@ -145,13 +145,12 @@ func transformToResponsesContent(content interface{}) ([]*ResponsesContentItem, 
 				mediaType, _ := source["media_type"].(string)
 				data, _ := source["data"].(string)
 
-				fileData := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
-				fileName := "image.jpg"
+				// Create data URL format: data:image/png;base64,{base64_data}
+				imageURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
 
 				items = append(items, &ResponsesContentItem{
-					Type:     "input_file",
-					FileData: &fileData,
-					FileName: &fileName,
+					Type:     "input_image",
+					ImageURL: &imageURL,
 				})
 			}
 		}

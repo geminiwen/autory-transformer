@@ -219,12 +219,13 @@ type ResponsesInput struct {
 }
 
 type ResponsesContentItem struct {
-	Type     string  `json:"type"` // "input_file", "input_text"
+	Type     string  `json:"type"` // "input_file", "input_text", "input_image"
 	Text     *string `json:"text,omitempty"`
 	FileData *string `json:"file_data,omitempty"` // data:application/pdf;base64,...
 	FileName *string `json:"filename,omitempty"`   // required when using file_data
 	FileID   *string `json:"file_id,omitempty"`
 	FileURL  *string `json:"file_url,omitempty"`
+	ImageURL *string `json:"image_url,omitempty"` // for input_image type
 }
 
 type ResponsesResponse struct {
