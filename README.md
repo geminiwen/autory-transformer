@@ -235,8 +235,8 @@ message = client.messages.create(
   - 示例: `https://ark.ap-southeast.bytepluses.com/api/v3`
 
 - **X-Autory-Ark-MultiModal**: 多模态模型名称
-  - 用于 PDF/文档理解等多模态任务
-  - 当请求包含 `document` 类型内容时，会使用此模型
+  - 用于 PDF/文档理解、视频理解等多模态任务
+  - 当请求包含 `document` 或 `video` 类型内容时，会使用此模型
   - 如果未指定，则使用请求中的原始模型（可能不支持多模态）
   - 示例: `seed-1-6-250915`
 
@@ -249,20 +249,23 @@ message = client.messages.create(
 
 ### PDF 文档支持 ✅
 
-从版本 1.1.0 开始，Autory Transformer 支持 PDF 文档处理：
+从版本 1.1.0 开始，Autory Transformer 支持多模态内容处理（PDF、视频）：
 
 **特性**：
-- **自动 API 切换**: 当请求中包含 `document` 类型内容时，自动切换到火山方舟 Responses API
-- **格式转换**: Anthropic 的 `document` 类型会被转换为 Responses API 的 `input_file` 格式（Base64）
+- **自动 API 切换**: 当请求中包含 `document` 或 `video` 类型内容时，自动切换到火山方舟 Responses API
+- **格式转换**:
+  - Anthropic 的 `document` 类型 → Responses API 的 `input_file` 格式（Base64）
+  - Anthropic 的 `image` 类型 → Responses API 的 `input_image` 格式（Base64）
+  - Anthropic 的 `video` 类型 → Responses API 的 `input_video` 格式（Base64）
 - **流式和非流式**: 支持流式和非流式两种请求方式
-- **文件大小限制**: Base64 方式最大支持 50 MB 的 PDF 文件
+- **文件大小限制**: Base64 方式最大支持 50 MB
 
 **模型选择**：
 - 使用 `X-Autory-Ark-MultiModal` header 指定多模态模型（推荐）
   - 例如: `X-Autory-Ark-MultiModal: seed-1-6-250915`
-- 如果未指定，将使用请求中的原始模型（可能不支持 PDF）
+- 如果未指定，将使用请求中的原始模型（可能不支持多模态内容）
 
-**示例 Anthropic 请求格式**：
+**示例 1 - PDF 文档**：
 ```json
 {
   "model": "ep-20250201-xxxxx",
@@ -281,6 +284,33 @@ message = client.messages.create(
         {
           "type": "text",
           "text": "请总结这个文档的内容"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**示例 2 - 视频理解**：
+```json
+{
+  "model": "ep-20250201-xxxxx",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "video",
+          "source": {
+            "type": "base64",
+            "media_type": "video/mp4",
+            "data": "AAAAIGZ0eXBpc29t..."
+          },
+          "fps": 1
+        },
+        {
+          "type": "text",
+          "text": "描述这个视频的内容"
         }
       ]
     }

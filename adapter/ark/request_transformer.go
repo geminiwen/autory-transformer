@@ -33,14 +33,14 @@ func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*CreateC
 
 func checkHasDocument(req *types.AnthropicRequest) bool {
 	for _, msg := range req.Messages {
-		if hasDocumentContent(msg.Content) {
+		if hasMultimodalContent(msg.Content) {
 			return true
 		}
 	}
 	return false
 }
 
-func hasDocumentContent(content interface{}) bool {
+func hasMultimodalContent(content interface{}) bool {
 	blocks, ok := content.([]interface{})
 	if !ok {
 		return false
@@ -51,8 +51,11 @@ func hasDocumentContent(content interface{}) bool {
 		if !ok {
 			continue
 		}
-		if blockType, ok := blockMap["type"].(string); ok && blockType == "document" {
-			return true
+		if blockType, ok := blockMap["type"].(string); ok {
+			// Check for any multimodal content types that need Responses API
+			if blockType == "document" || blockType == "video" {
+				return true
+			}
 		}
 	}
 	return false
@@ -151,6 +154,33 @@ func transformToResponsesContent(content interface{}) ([]*ResponsesContentItem, 
 				items = append(items, &ResponsesContentItem{
 					Type:     "input_image",
 					ImageURL: &imageURL,
+				})
+
+			case "video":
+				// Convert video to input_video format
+				source, ok := blockMap["source"].(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid video source")
+				}
+
+				mediaType, _ := source["media_type"].(string)
+				data, _ := source["data"].(string)
+
+				// Create data URL format: data:video/mp4;base64,{base64_data}
+				videoURL := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+
+				// Default FPS to 1 if not specified
+				fps := 1
+				if fpsVal, ok := blockMap["fps"].(float64); ok {
+					fps = int(fpsVal)
+				} else if fpsVal, ok := blockMap["fps"].(int); ok {
+					fps = fpsVal
+				}
+
+				items = append(items, &ResponsesContentItem{
+					Type:     "input_video",
+					VideoURL: &videoURL,
+					FPS:      &fps,
 				})
 			}
 		}

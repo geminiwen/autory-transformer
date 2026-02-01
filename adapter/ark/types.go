@@ -219,13 +219,15 @@ type ResponsesInput struct {
 }
 
 type ResponsesContentItem struct {
-	Type     string  `json:"type"` // "input_file", "input_text", "input_image"
+	Type     string  `json:"type"` // "input_file", "input_text", "input_image", "input_video"
 	Text     *string `json:"text,omitempty"`
 	FileData *string `json:"file_data,omitempty"` // data:application/pdf;base64,...
 	FileName *string `json:"filename,omitempty"`   // required when using file_data
 	FileID   *string `json:"file_id,omitempty"`
 	FileURL  *string `json:"file_url,omitempty"`
 	ImageURL *string `json:"image_url,omitempty"` // for input_image type
+	VideoURL *string `json:"video_url,omitempty"` // for input_video type
+	FPS      *int    `json:"fps,omitempty"`       // frames per second for video
 }
 
 type ResponsesResponse struct {
