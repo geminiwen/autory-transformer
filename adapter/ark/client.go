@@ -199,3 +199,144 @@ func handleHTTPError(statusCode int, body []byte) error {
 	errorType := errors.MapHTTPStatusToErrorType(statusCode)
 	return errors.NewAPIError(errorType, fmt.Sprintf("HTTP %d: %s", statusCode, string(body)))
 }
+
+// SendResponsesRequest sends a non-streaming request to Ark Responses API
+func (c *Client) SendResponsesRequest(ctx context.Context, req *ResponsesRequest, apiKey, baseURL string) (*ResponsesResponse, error) {
+	// Marshal request to JSON
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/responses", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Check for HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		return nil, handleHTTPError(resp.StatusCode, body)
+	}
+
+	// Parse response
+	var responsesResp ResponsesResponse
+	if err := json.Unmarshal(body, &responsesResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &responsesResp, nil
+}
+
+// StreamResponsesRequest sends a streaming request to Ark Responses API
+func (c *Client) StreamResponsesRequest(ctx context.Context, req *ResponsesRequest, apiKey, baseURL string) (*ResponsesStreamReader, error) {
+	hlog.Infof("[ArkClient] Creating responses stream request to: %s", baseURL)
+
+	// Marshal request to JSON
+	req.Stream = boolPtr(true)
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Create HTTP request
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/responses", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	hlog.Infof("[ArkClient] Sending HTTP request...")
+
+	// Send request
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		hlog.Errorf("[ArkClient] HTTP request failed: %v", err)
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		hlog.Errorf("[ArkClient] HTTP error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, string(body))
+	}
+
+	hlog.Infof("[ArkClient] Responses stream reader created successfully")
+	return &ResponsesStreamReader{
+		reader: bufio.NewReader(resp.Body),
+		resp:   resp,
+	}, nil
+}
+
+// ResponsesStreamReader reads streaming responses from Responses API
+type ResponsesStreamReader struct {
+	reader *bufio.Reader
+	resp   *http.Response
+}
+
+func (sr *ResponsesStreamReader) Recv() (ResponsesStreamResponse, error) {
+	for {
+		line, err := sr.reader.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				hlog.Infof("[ResponsesStreamReader] Reached EOF")
+			}
+			return ResponsesStreamResponse{}, err
+		}
+
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+
+		hlog.Debugf("[ResponsesStreamReader] Raw line: %s", string(line[:min(len(line), 100)]))
+
+		// Parse SSE format: "data: {...}"
+		if bytes.HasPrefix(line, []byte("data: ")) {
+			data := bytes.TrimPrefix(line, []byte("data: "))
+
+			// Check for [DONE] marker
+			if bytes.HasPrefix(data, []byte("[DONE]")) {
+				hlog.Infof("[ResponsesStreamReader] Received [DONE] marker")
+				return ResponsesStreamResponse{}, io.EOF
+			}
+
+			var chunk ResponsesStreamResponse
+			if err := json.Unmarshal(data, &chunk); err != nil {
+				hlog.Warnf("[ResponsesStreamReader] Failed to parse chunk: %v, data: %s", err, string(data[:min(len(data), 100)]))
+				continue
+			}
+
+			return chunk, nil
+		}
+	}
+}
+
+func (sr *ResponsesStreamReader) Close() error {
+	if sr.resp != nil && sr.resp.Body != nil {
+		return sr.resp.Body.Close()
+	}
+	return nil
+}

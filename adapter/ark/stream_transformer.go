@@ -273,3 +273,98 @@ func generatePlaceholderSignature() string {
 	// Note: This is not a valid Anthropic signature, but is needed for stream format compatibility
 	return "autory"
 }
+
+// TransformResponsesStreamChunk converts Responses API stream chunk to Anthropic stream events
+func TransformResponsesStreamChunk(chunk *ResponsesStreamResponse, state *StreamState) []string {
+	var events []string
+
+	// Send message_start if this is the first chunk
+	if !state.HasStarted {
+		events = append(events, formatStreamEvent("message_start", &types.StreamEvent{
+			Type: "message_start",
+			Message: &types.AnthropicResponse{
+				ID:           state.MessageID,
+				Type:         "message",
+				Role:         "assistant",
+				Content:      []types.ContentBlock{},
+				Model:        state.Model,
+				StopReason:   nil,
+				StopSequence: nil,
+				Usage:        types.AnthropicUsage{},
+			},
+		}))
+		state.HasStarted = true
+		fmt.Printf("[ResponsesStreamTransform] Sent message_start event, messageID: %s\n", state.MessageID)
+	}
+
+	// Handle delta text
+	if chunk.Delta != nil && chunk.Delta.Text != "" {
+		// Start text block if needed
+		if state.CurrentBlock == nil || state.CurrentBlock.Type != "text" {
+			if state.CurrentBlock != nil {
+				events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
+					Type:  "content_block_stop",
+					Index: &state.ContentIndex,
+				}))
+				state.ContentIndex++
+			}
+
+			emptyStr := ""
+			state.CurrentBlock = &types.ContentBlock{
+				Type: "text",
+				Text: &emptyStr,
+			}
+			events = append(events, formatStreamEvent("content_block_start", &types.StreamEvent{
+				Type:         "content_block_start",
+				Index:        &state.ContentIndex,
+				ContentBlock: state.CurrentBlock,
+			}))
+		}
+
+		// Send text delta
+		events = append(events, formatStreamEvent("content_block_delta", &types.StreamEvent{
+			Type:  "content_block_delta",
+			Index: &state.ContentIndex,
+			Delta: &types.TextDelta{
+				Type: "text_delta",
+				Text: chunk.Delta.Text,
+			},
+		}))
+	}
+
+	// Handle completion
+	if chunk.Type == "response.completed" || chunk.Type == "response.done" {
+		// Stop current content block
+		if state.CurrentBlock != nil {
+			events = append(events, formatStreamEvent("content_block_stop", &types.StreamEvent{
+				Type:  "content_block_stop",
+				Index: &state.ContentIndex,
+			}))
+		}
+
+		// Update usage if available
+		if chunk.Usage != nil {
+			state.InputTokens = chunk.Usage.PromptTokens
+			state.OutputTokens = chunk.Usage.CompletionTokens
+		}
+
+		// Send message_delta with stop_reason
+		events = append(events, formatStreamEvent("message_delta", &types.StreamEvent{
+			Type: "message_delta",
+			Delta: map[string]interface{}{
+				"stop_reason": "end_turn",
+			},
+			Usage: &types.AnthropicUsage{
+				InputTokens:  state.InputTokens,
+				OutputTokens: state.OutputTokens,
+			},
+		}))
+
+		// Send message_stop
+		events = append(events, formatStreamEvent("message_stop", &types.StreamEvent{
+			Type: "message_stop",
+		}))
+	}
+
+	return events
+}

@@ -97,3 +97,42 @@ func transformStopReason(arkReason FinishReason) string {
 func generateMessageID() string {
 	return fmt.Sprintf("msg_%d", time.Now().UnixNano())
 }
+
+// TransformResponsesResponse converts Ark Responses API response to Anthropic response
+func TransformResponsesResponse(responsesResp *ResponsesResponse, originalModel string) *types.AnthropicResponse {
+	var content []types.ContentBlock
+
+	if len(responsesResp.Output) > 0 {
+		for _, outputItem := range responsesResp.Output {
+			if outputItem.Role == "assistant" {
+				for _, contentItem := range outputItem.Content {
+					if contentItem.Type == "input_text" && contentItem.Text != nil {
+						content = append(content, types.ContentBlock{
+							Type: "text",
+							Text: contentItem.Text,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	var usage types.AnthropicUsage
+	if responsesResp.Usage != nil {
+		usage = types.AnthropicUsage{
+			InputTokens:  responsesResp.Usage.PromptTokens,
+			OutputTokens: responsesResp.Usage.CompletionTokens,
+		}
+	}
+
+	stopReason := "end_turn"
+	return &types.AnthropicResponse{
+		ID:         generateMessageID(),
+		Type:       "message",
+		Role:       "assistant",
+		Content:    content,
+		Model:      originalModel,
+		StopReason: &stopReason,
+		Usage:      usage,
+	}
+}

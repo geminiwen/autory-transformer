@@ -66,7 +66,7 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 	hlog.Infof("[Handler] Using endpoint: %s", arkEndpoint)
 
 	// Transform request
-	arkReq, err := ark.TransformRequest(&req, arkEndpoint)
+	chatReq, responsesReq, err := ark.TransformRequest(&req, arkEndpoint)
 	if err != nil {
 		if apiErr, ok := err.(*errors.APIError); ok {
 			h.sendError(c, consts.StatusBadRequest, apiErr)
@@ -76,13 +76,23 @@ func (h *MessagesHandler) Handle(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// Handle streaming vs non-streaming
-	if req.Stream {
-		hlog.Infof("[Handler] Routing to stream handler")
-		h.handleStream(ctx, c, arkReq, req.Model, apiKey, arkBaseURL)
+	// Determine which API to use based on content type
+	if responsesReq != nil {
+		// Use Responses API for document understanding
+		hlog.Infof("[Handler] Using Responses API for document understanding")
+		if req.Stream {
+			h.handleResponsesStream(ctx, c, responsesReq, req.Model, apiKey, arkBaseURL)
+		} else {
+			h.handleResponsesNonStream(ctx, c, responsesReq, req.Model, apiKey, arkBaseURL)
+		}
 	} else {
-		hlog.Infof("[Handler] Routing to non-stream handler")
-		h.handleNonStream(ctx, c, arkReq, req.Model, apiKey, arkBaseURL)
+		// Use Chat Completions API for regular requests
+		hlog.Infof("[Handler] Using Chat Completions API")
+		if req.Stream {
+			h.handleStream(ctx, c, chatReq, req.Model, apiKey, arkBaseURL)
+		} else {
+			h.handleNonStream(ctx, c, chatReq, req.Model, apiKey, arkBaseURL)
+		}
 	}
 }
 
@@ -182,6 +192,91 @@ func (h *MessagesHandler) handleStream(ctx context.Context, c *app.RequestContex
 	}
 
 	hlog.Infof("[Stream] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
+		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
+}
+
+// handleResponsesNonStream handles non-streaming requests using Responses API
+func (h *MessagesHandler) handleResponsesNonStream(ctx context.Context, c *app.RequestContext, responsesReq *ark.ResponsesRequest, originalModel, apiKey, arkBaseURL string) {
+	// Send request to Ark Responses API
+	responsesResp, err := h.arkClient.SendResponsesRequest(ctx, responsesReq, apiKey, arkBaseURL)
+	if err != nil {
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+
+	// Transform response
+	anthropicResp := ark.TransformResponsesResponse(responsesResp, originalModel)
+
+	c.JSON(consts.StatusOK, anthropicResp)
+}
+
+// handleResponsesStream handles streaming requests using Responses API
+func (h *MessagesHandler) handleResponsesStream(ctx context.Context, c *app.RequestContext, responsesReq *ark.ResponsesRequest, originalModel, apiKey, arkBaseURL string) {
+	hlog.Infof("[ResponsesStream] Starting stream request for model: %s", originalModel)
+
+	// Send streaming request
+	streamReader, err := h.arkClient.StreamResponsesRequest(ctx, responsesReq, apiKey, arkBaseURL)
+	if err != nil {
+		hlog.Errorf("[ResponsesStream] Failed to create stream: %v", err)
+		if apiErr, ok := err.(*errors.APIError); ok {
+			statusCode := h.errorTypeToStatus(apiErr.Type)
+			h.sendError(c, statusCode, apiErr)
+		} else {
+			h.sendError(c, consts.StatusInternalServerError, errors.NewAPIError(errors.APIErrorType, err.Error()))
+		}
+		return
+	}
+	defer streamReader.Close()
+
+	// Create SSE stream
+	stream := sse.NewStream(c)
+	hlog.Infof("[ResponsesStream] SSE stream created, starting to receive chunks")
+
+	// Stream events
+	state := ark.NewStreamState(originalModel)
+	chunkCount := 0
+
+	for {
+		chunk, err := streamReader.Recv()
+		if err != nil {
+			if err != io.EOF {
+				hlog.Errorf("[ResponsesStream] Error reading stream chunk: %v", err)
+			} else {
+				hlog.Infof("[ResponsesStream] Stream ended normally (EOF)")
+			}
+			break
+		}
+
+		chunkCount++
+		hlog.Infof("[ResponsesStream] Received chunk #%d, type: %s", chunkCount, chunk.Type)
+
+		// Transform chunk to Anthropic events
+		events := ark.TransformResponsesStreamChunk(&chunk, state)
+		hlog.Infof("[ResponsesStream] Transformed chunk #%d into %d events", chunkCount, len(events))
+
+		// Parse and publish each event using SSE stream
+		for _, eventStr := range events {
+			eventType, eventData := parseSSEEvent(eventStr)
+			if eventData != "" {
+				sseEvent := &sse.Event{
+					Event: eventType,
+					Data:  []byte(eventData),
+				}
+				if err := stream.Publish(sseEvent); err != nil {
+					hlog.Errorf("[ResponsesStream] Error publishing event: %v", err)
+					return
+				}
+				hlog.Debugf("[ResponsesStream] Published event: %s", eventType)
+			}
+		}
+	}
+
+	hlog.Infof("[ResponsesStream] Stream completed - Chunks: %d, Input tokens: %d, Output tokens: %d, Total: %d",
 		chunkCount, state.InputTokens, state.OutputTokens, state.InputTokens+state.OutputTokens)
 }
 

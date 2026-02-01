@@ -10,11 +10,158 @@ import (
 )
 
 // TransformRequest converts Anthropic request to Ark SDK request
-func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*CreateChatCompletionRequest, error) {
+// Returns either a chat completion request or a responses request depending on content type
+func TransformRequest(req *types.AnthropicRequest, arkEndpoint string) (*CreateChatCompletionRequest, *ResponsesRequest, error) {
 	// Validate unsupported features
 	if err := validateRequest(req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	// Check if request contains document type
+	hasDocument := checkHasDocument(req)
+
+	if hasDocument {
+		// Use Responses API for document understanding
+		responsesReq, err := transformToResponsesRequest(req, arkEndpoint)
+		return nil, responsesReq, err
+	}
+
+	// Use Chat Completions API for regular requests
+	chatReq, err := transformToChatRequest(req, arkEndpoint)
+	return chatReq, nil, err
+}
+
+func checkHasDocument(req *types.AnthropicRequest) bool {
+	for _, msg := range req.Messages {
+		if hasDocumentContent(msg.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDocumentContent(content interface{}) bool {
+	blocks, ok := content.([]interface{})
+	if !ok {
+		return false
+	}
+
+	for _, block := range blocks {
+		blockMap, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if blockType, ok := blockMap["type"].(string); ok && blockType == "document" {
+			return true
+		}
+	}
+	return false
+}
+
+// transformToResponsesRequest converts Anthropic request to Responses API format
+func transformToResponsesRequest(req *types.AnthropicRequest, arkEndpoint string) (*ResponsesRequest, error) {
+	var inputs []*ResponsesInput
+
+	for _, msg := range req.Messages {
+		content, err := transformToResponsesContent(msg.Content)
+		if err != nil {
+			return nil, err
+		}
+
+		inputs = append(inputs, &ResponsesInput{
+			Role:    msg.Role,
+			Content: content,
+		})
+	}
+
+	responsesReq := &ResponsesRequest{
+		Model: arkEndpoint,
+		Input: inputs,
+	}
+
+	if req.Stream {
+		responsesReq.Stream = &req.Stream
+	}
+
+	return responsesReq, nil
+}
+
+func transformToResponsesContent(content interface{}) ([]*ResponsesContentItem, error) {
+	var items []*ResponsesContentItem
+
+	switch v := content.(type) {
+	case string:
+		// Simple text content
+		items = append(items, &ResponsesContentItem{
+			Type: "input_text",
+			Text: &v,
+		})
+
+	case []interface{}:
+		// Complex content blocks
+		for _, block := range v {
+			blockMap, ok := block.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			blockType, _ := blockMap["type"].(string)
+			switch blockType {
+			case "text":
+				if text, ok := blockMap["text"].(string); ok {
+					items = append(items, &ResponsesContentItem{
+						Type: "input_text",
+						Text: &text,
+					})
+				}
+
+			case "document":
+				// Convert Anthropic document to Responses API format
+				source, ok := blockMap["source"].(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid document source")
+				}
+
+				mediaType, _ := source["media_type"].(string)
+				data, _ := source["data"].(string)
+
+				// Create data URL format: data:application/pdf;base64,{base64_data}
+				fileData := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+				fileName := "document.pdf" // Default filename
+
+				items = append(items, &ResponsesContentItem{
+					Type:     "input_file",
+					FileData: &fileData,
+					FileName: &fileName,
+				})
+
+			case "image":
+				// Convert image to input_file format
+				source, ok := blockMap["source"].(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("invalid image source")
+				}
+
+				mediaType, _ := source["media_type"].(string)
+				data, _ := source["data"].(string)
+
+				fileData := fmt.Sprintf("data:%s;base64,%s", mediaType, data)
+				fileName := "image.jpg"
+
+				items = append(items, &ResponsesContentItem{
+					Type:     "input_file",
+					FileData: &fileData,
+					FileName: &fileName,
+				})
+			}
+		}
+	}
+
+	return items, nil
+}
+
+// transformToChatRequest is the original TransformRequest logic for chat completions
+func transformToChatRequest(req *types.AnthropicRequest, arkEndpoint string) (*CreateChatCompletionRequest, error) {
 
 	// Check if using thinking model
 	isThinkingModel := req.Thinking != nil
@@ -80,32 +227,8 @@ func validateRequest(req *types.AnthropicRequest) error {
 		return errors.NewInvalidRequestError("Structured output (output_config) is not supported")
 	}
 
-	// Check for PDF documents
-	for _, msg := range req.Messages {
-		if hasPDFContent(msg.Content) {
-			return errors.NewInvalidRequestError("PDF documents are not supported by this proxy")
-		}
-	}
-
+	// No need to check for PDF documents anymore - we support them via Responses API
 	return nil
-}
-
-func hasPDFContent(content interface{}) bool {
-	blocks, ok := content.([]interface{})
-	if !ok {
-		return false
-	}
-
-	for _, block := range blocks {
-		blockMap, ok := block.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if blockType, ok := blockMap["type"].(string); ok && blockType == "document" {
-			return true
-		}
-	}
-	return false
 }
 
 func transformMessages(req *types.AnthropicRequest) ([]*ChatCompletionMessage, error) {

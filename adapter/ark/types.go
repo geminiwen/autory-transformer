@@ -205,3 +205,56 @@ type RequestError struct {
 func (e *RequestError) Error() string {
 	return e.Err.Error()
 }
+
+// Responses API types (for document understanding)
+type ResponsesRequest struct {
+	Model  string               `json:"model"`
+	Input  []*ResponsesInput    `json:"input"`
+	Stream *bool                `json:"stream,omitempty"`
+}
+
+type ResponsesInput struct {
+	Role    string                  `json:"role"`
+	Content []*ResponsesContentItem `json:"content"`
+}
+
+type ResponsesContentItem struct {
+	Type     string  `json:"type"` // "input_file", "input_text"
+	Text     *string `json:"text,omitempty"`
+	FileData *string `json:"file_data,omitempty"` // data:application/pdf;base64,...
+	FileName *string `json:"filename,omitempty"`   // required when using file_data
+	FileID   *string `json:"file_id,omitempty"`
+	FileURL  *string `json:"file_url,omitempty"`
+}
+
+type ResponsesResponse struct {
+	ID     string                  `json:"id"`
+	Object string                  `json:"object"`
+	Output []*ResponsesOutputItem  `json:"output"`
+	Usage  *ResponsesUsage         `json:"usage,omitempty"`
+}
+
+type ResponsesOutputItem struct {
+	Role    string                  `json:"role"`
+	Content []*ResponsesContentItem `json:"content"`
+}
+
+type ResponsesUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+// Responses API stream types
+type ResponsesStreamResponse struct {
+	ID     string                  `json:"id"`
+	Object string                  `json:"object"`
+	Type   string                  `json:"type"` // event type
+	Delta  *ResponsesStreamDelta   `json:"delta,omitempty"`
+	Output []*ResponsesOutputItem  `json:"output,omitempty"`
+	Usage  *ResponsesUsage         `json:"usage,omitempty"`
+}
+
+type ResponsesStreamDelta struct {
+	Text string `json:"text,omitempty"`
+}

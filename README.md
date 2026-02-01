@@ -230,12 +230,43 @@ message = client.messages.create(
 
 以下功能在请求时会返回 400 错误:
 
-1. **PDF 文档** (`document` 类型内容)
-   - 火山方舟目前只支持图像
-   - TODO: 未来可能支持 PDF → 图片转换
-
-2. **结构化输出** (`output_config` 参数)
+1. **结构化输出** (`output_config` 参数)
    - 火山方舟 API 无对应参数
+
+### PDF 文档支持 ✅
+
+从版本 1.1.0 开始，Autory Transformer 支持 PDF 文档处理：
+
+- **自动 API 切换**: 当请求中包含 `document` 类型内容时，自动切换到火山方舟 Responses API
+- **格式转换**: Anthropic 的 `document` 类型会被转换为 Responses API 的 `input_file` 格式（Base64）
+- **流式和非流式**: 支持流式和非流式两种请求方式
+- **文件大小限制**: Base64 方式最大支持 50 MB 的 PDF 文件
+
+示例 Anthropic 请求格式：
+```json
+{
+  "model": "seed-1-6-250915",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "document",
+          "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "JVBERi0xLjQK..."
+          }
+        },
+        {
+          "type": "text",
+          "text": "请总结这个文档的内容"
+        }
+      ]
+    }
+  ]
+}
+```
 
 ### 静默忽略的功能
 
