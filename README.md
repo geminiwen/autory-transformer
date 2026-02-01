@@ -43,7 +43,8 @@ The service uses HTTP headers for dynamic configuration (no environment variable
 
 **Common Headers:**
 - `Authorization: Bearer <API_KEY>` - Provider API key (required)
-- `X-Autory-Provider: <provider>` - Provider selection: `ark` or `dashscope` (required)
+- `X-Autory-Provider: <provider>` - Provider selection: `ark` or `dashscope` (optional, defaults to `ark`)
+  - Case-insensitive (`ARK`, `Ark`, `ark` all work)
 - `anthropic-version: 2023-06-01` - API version (optional)
 
 **Ark-specific Headers:**
